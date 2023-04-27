@@ -59,14 +59,14 @@
   (^ints [^IIndirectVector col ^long idx]
    (bloom-hashes col idx bloom-k bloom-bit-mask))
   (^ints [^IIndirectVector col ^long idx ^long k ^long mask]
-   (let [vec (.getVector col)
-         idx (.getIndex col idx)
-         hash-1 (.hashCode vec idx SimpleHasher/INSTANCE)
-         hash-2 (.hashCode vec idx (MurmurHasher. hash-1))
-         acc (int-array k)]
-     (dotimes [n k]
-       (aset acc n (unchecked-int (bit-and mask (+ hash-1 (* hash-2 n))))))
-     acc)))
+         (let [vec (.getVector col)
+               idx (.getIndex col idx)
+               hash-1 (.hashCode vec idx SimpleHasher/INSTANCE)
+               hash-2 (.hashCode vec idx (MurmurHasher. hash-1))
+               acc (int-array k)]
+           (dotimes [n k]
+             (aset acc n (unchecked-int (bit-and mask (+ hash-1 (* hash-2 n))))))
+           acc)))
 
 (def literal-hasher
   (-> (fn [{:keys [param param-type] :as param-expr} target-col-type]
