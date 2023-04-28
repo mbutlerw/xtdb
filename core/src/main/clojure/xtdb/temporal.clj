@@ -559,7 +559,7 @@
   (startTx [this-tm tx-key]
     (let [sys-time-μs (util/instant->micros (.sys-time tx-key))
           evicted-row-ids (Roaring64Bitmap.)
-          !kd-tree (volatile! kd-tree)
+          !kd-tree (volatile! (kd/kd-tree-retain kd-tree allocator))
           !current-row-ids (volatile! current-row-ids)]
 
       (when latest-completed-tx
@@ -595,12 +595,14 @@
           (vswap! !current-row-ids remove-evicted-row-ids evicted-row-ids))
 
         (commit [_]
+          (some-> kd-tree (util/try-close))
           (set! (.kd-tree this-tm) @!kd-tree)
           (set! (.current-row-ids this-tm) @!current-row-ids)
           (set! (.latest-completed-tx this-tm) tx-key)
           evicted-row-ids)
 
-        (abort [_])
+        (abort [_]
+          (util/try-close @!kd-tree))
 
         ITemporalRelationSource
         (createTemporalRelation [_ allocator columns temporal-min-range temporal-max-range row-id-bitmap]
