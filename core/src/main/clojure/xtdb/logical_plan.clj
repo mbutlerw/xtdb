@@ -514,11 +514,7 @@
         rename-map (select-keys smap projection)
         projection (replace smap projection)
         add-projection-fn (fn [relation]
-                            (let [relation (if (= projection (relation-columns relation))
-                                             relation
-                                             [:project projection
-                                              relation])
-                                  smap-inv (set/map-invert rename-map)
+                            (let [smap-inv (set/map-invert rename-map)
                                   relation (if project-anonymous-columns?
                                              relation
                                              (or (r/zmatch relation
