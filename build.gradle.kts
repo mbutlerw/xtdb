@@ -54,7 +54,7 @@ allprojects {
         tasks.withType(Test::class) {
             jvmArgs = defaultJvmArgs
 
-            maxHeapSize = "2g"
+            maxHeapSize = "4g"
         }
 
         if (plugins.hasPlugin("dev.clojurephant.clojure")) {
