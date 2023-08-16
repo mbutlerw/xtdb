@@ -145,7 +145,7 @@
           (locking this-table
             (let [wm-live-rel (open-wm-live-rel live-rel retain?)
                   col-types (live-rel->col-types wm-live-rel)
-                  wm-live-trie (.compactLogs ^LiveHashTrie @!transient-trie)]
+                  wm-live-trie @!transient-trie]
               (reify ILiveTableWatermark
                 (columnTypes [_] col-types)
                 (liveRelation [_] wm-live-rel)
@@ -176,13 +176,12 @@
   (openWatermark [this retain?]
     (locking this
       (let [wm-live-rel (open-wm-live-rel live-rel retain?)
-            col-types (live-rel->col-types wm-live-rel)
-            wm-live-trie (.compactLogs live-trie)]
+            col-types (live-rel->col-types wm-live-rel)]
 
         (reify ILiveTableWatermark
           (columnTypes [_] col-types)
           (liveRelation [_] wm-live-rel)
-          (liveTrie [_] wm-live-trie)
+          (liveTrie [_] live-trie)
 
           AutoCloseable
           (close [_]
