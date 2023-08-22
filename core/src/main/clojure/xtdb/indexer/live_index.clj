@@ -80,10 +80,8 @@
     (try
       (doseq [^IVectorWriter w (vals rel)]
         (.syncValueCount w)
-        (let [sliced-vector (cond-> (.getVector w)
-                              retain? (util/slice-vec))]
-
-          (.add out-cols (vr/vec->reader sliced-vector))))
+        (.add out-cols (vr/vec->reader (cond-> (.getVector w)
+                                         retain? (util/slice-vec)))))
 
       (vr/rel-reader out-cols)
 
@@ -145,7 +143,7 @@
 
         (openWatermark [_ retain?]
           (locking this-table
-            (let [[_ wm-live-rel] (open-wm-live-rel live-rel retain?)
+            (let [wm-live-rel (open-wm-live-rel live-rel retain?)
                   col-types (live-rel->col-types wm-live-rel)
                   wm-live-trie @!transient-trie]
 
@@ -181,7 +179,7 @@
     (locking this
       (let [wm-live-rel (open-wm-live-rel live-rel retain?)
             col-types (live-rel->col-types wm-live-rel)
-            wm-live-trie (.withIidReader (.live-trie this) (.readerForName wm-live-rel "xt$iid"))]
+            wm-live-trie (.withIidReader ^LiveHashTrie (.live-trie this) (.readerForName wm-live-rel "xt$iid"))]
 
         (reify ILiveTableWatermark
           (columnTypes [_] col-types)

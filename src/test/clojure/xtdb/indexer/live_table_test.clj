@@ -8,10 +8,13 @@
             [xtdb.test-util :as tu]
             [xtdb.util :as util]
             [xtdb.vector.reader :as vr])
-  (:import (java.nio ByteBuffer)
+  (:import (java.lang AutoCloseable)
+           (java.nio ByteBuffer)
            (java.util Arrays HashMap)
            (org.apache.arrow.memory RootAllocator)
-           (xtdb.indexer.live_index ILiveTable ILiveTableTx TestLiveTable)
+           (xtdb.indexer.live_index
+             ILiveTable ILiveTableTx TestLiveTable
+             ILiveIndex ILiveTableWatermark ILiveIndexWatermark)
            xtdb.vector.IVectorPosition
            (xtdb.trie LiveHashTrie LiveHashTrie$Leaf)))
 
@@ -46,25 +49,21 @@
           (let [leaves (.leaves (.compactLogs ^LiveHashTrie (.live-trie ^TestLiveTable live-table)))
                 leaf ^LiveHashTrie$Leaf (first leaves)]
 
-            (clojure.pprint/pprint  (.compactLogs (.live-trie ^TestLiveTable live-table)))
             (t/is (= 1 (count leaves)))
-            (println "==========")
-            (clojure.pprint/pprint (count (vec (.path leaf)))
-                                   )
-  
-            #_(t/is
+
+            (t/is
              (uuid-equal-to-path?
               uuid
               (.path leaf)))
 
-            #_(t/is (= (reverse (range n))
+            (t/is (= (reverse (range n))
                      (->> leaf
                           (.data)
                           (vec)))))
 
-          #_@(.finishChunk live-table 0)
+          @(.finishChunk live-table 0)
 
-          #_(tu/with-allocator
+          (tu/with-allocator
             #(tj/check-json
               (.toPath (io/as-file (io/resource "xtdb/live-table-test/max-depth-trie-s")))
               path)))))
@@ -109,12 +108,12 @@
               (.toPath (io/as-file (io/resource "xtdb/live-table-test/max-depth-trie-l")))
               path)))))))
 
-(defn live-table-wm->data [live-table-wm]
+(defn live-table-wm->data [^ILiveTableWatermark live-table-wm]
   (let [live-rel-data (vr/rel->rows (.liveRelation live-table-wm))
         live-trie (.compactLogs (.liveTrie live-table-wm))
         live-trie-leaf-data (->> live-trie
                                  (.leaves)
-                                 (mapcat #(.data %))
+                                 (mapcat #(.data ^LiveHashTrie$Leaf %))
                                  (vec))
         live-trie-iids (map
                          #(util/byte-buffer->uuid
@@ -130,7 +129,7 @@
     (with-open [obj-store (obj-store-test/in-memory)
                 allocator (RootAllocator.)
                 live-table ^ILiveTable (live-index/->live-table
-                                         allocator obj-store "foo" {})
+                                         allocator obj-store "foo")
                 live-table-tx (.startTx
                                 live-table (xtp/->TransactionInstant 0 (.toInstant #inst "2000")))]
 
@@ -142,7 +141,7 @@
 
       (.commit live-table-tx)
 
-      (with-open [live-table-wm (.openWatermark live-table true)]
+      (with-open [live-table-wm ^AutoCloseable (.openWatermark live-table true)]
 
         (let [live-table-before (live-table-wm->data live-table-wm)]
 
@@ -162,7 +161,7 @@
         table-name "foo"]
     (with-open [obj-store (obj-store-test/in-memory)
                 allocator (RootAllocator.)
-                live-index (live-index/->LiveIndex allocator obj-store (HashMap.) 64 1024)
+                live-index ^ILiveIndex (live-index/->LiveIndex allocator obj-store (HashMap.) 64 1024)
                 live-index-tx (.startTx
                                 live-index (xtp/->TransactionInstant 0 (.toInstant #inst "2000")))
                 live-table-tx ^ILiveTableTx (.liveTable live-index-tx table-name)]
@@ -175,14 +174,14 @@
 
       (.commit live-index-tx)
 
-      (with-open [live-index-wm (.openWatermark live-index)]
+      (with-open [live-index-wm ^AutoCloseable (.openWatermark live-index)]
 
-        (let [live-table-before (live-table-wm->data (.liveTable live-index-wm table-name))]
+        (let [live-table-before (live-table-wm->data (.liveTable ^ILiveIndexWatermark live-index-wm table-name))]
 
           (.finishChunk live-index 0)
           (.close live-index)
 
-          (let [live-table-after (live-table-wm->data (.liveTable live-index-wm table-name))]
+          (let [live-table-after (live-table-wm->data (.liveTable ^ILiveIndexWatermark live-index-wm table-name))]
 
             (t/is (= (:live-trie-iids live-table-before)
                      (:live-trie-iids live-table-after)
