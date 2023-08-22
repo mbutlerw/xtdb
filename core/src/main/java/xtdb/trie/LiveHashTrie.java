@@ -57,6 +57,7 @@ public record LiveHashTrie(Node rootNode, IVectorReader iidReader) implements Ha
         return new LiveHashTrie(rootNode.add(this, idx), iidReader);
     }
 
+    @SuppressWarnings("unused")
     public LiveHashTrie withIidReader(IVectorReader iidReader) {
         return new LiveHashTrie(rootNode, iidReader);
     }
