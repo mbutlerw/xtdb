@@ -80,8 +80,10 @@
     (try
       (doseq [^IVectorWriter w (vals rel)]
         (.syncValueCount w)
-        (.add out-cols (vr/vec->reader (cond-> (.getVector w)
-                                         retain? (util/slice-vec)))))
+        (let [sliced-vector (cond-> (.getVector w)
+                              retain? (util/slice-vec))]
+
+          (.add out-cols (vr/vec->reader sliced-vector))))
 
       (vr/rel-reader out-cols)
 
@@ -143,9 +145,10 @@
 
         (openWatermark [_ retain?]
           (locking this-table
-            (let [wm-live-rel (open-wm-live-rel live-rel retain?)
+            (let [[_ wm-live-rel] (open-wm-live-rel live-rel retain?)
                   col-types (live-rel->col-types wm-live-rel)
                   wm-live-trie @!transient-trie]
+
               (reify ILiveTableWatermark
                 (columnTypes [_] col-types)
                 (liveRelation [_] wm-live-rel)
@@ -178,7 +181,7 @@
     (locking this
       (let [wm-live-rel (open-wm-live-rel live-rel retain?)
             col-types (live-rel->col-types wm-live-rel)
-            wm-live-trie live-trie]
+            wm-live-trie (.withIidReader (.live-trie this) (.readerForName wm-live-rel "xt$iid"))]
 
         (reify ILiveTableWatermark
           (columnTypes [_] col-types)
@@ -203,8 +206,8 @@
 
   ([allocator object-store table-name
     {:keys [->live-trie]
-     :or {->live-trie (fn [iid-vec]
-                        (LiveHashTrie/emptyTrie iid-vec))}}]
+     :or {->live-trie (fn [iid-rdr]
+                        (LiveHashTrie/emptyTrie iid-rdr))}}]
 
    (util/with-close-on-catch [rel (trie/open-leaf-root allocator)]
      (let [iid-wtr (.writerForName rel "xt$iid")
@@ -212,15 +215,15 @@
            put-wtr (.writerForTypeId op-wtr (byte 0))
            delete-wtr (.writerForTypeId op-wtr (byte 1))]
        (->LiveTable allocator object-store table-name rel
-                    (->live-trie (.getVector iid-wtr))
+                    (->live-trie (vw/vec-wtr->rdr iid-wtr))
                     iid-wtr (.writerForName rel "xt$system_from")
                     put-wtr (.structKeyWriter put-wtr "xt$valid_from") (.structKeyWriter put-wtr "xt$valid_to")
                     (.structKeyWriter put-wtr "xt$doc") delete-wtr (.structKeyWriter delete-wtr "xt$valid_from")
                     (.structKeyWriter delete-wtr "xt$valid_to")
                     (.writerForTypeId op-wtr (byte 2)))))))
 
-(defn ->live-trie [log-limit page-limit iid-vec]
-  (-> (doto (LiveHashTrie/builder iid-vec)
+(defn ->live-trie [log-limit page-limit iid-rdr]
+  (-> (doto (LiveHashTrie/builder iid-rdr)
         (.setLogLimit log-limit)
         (.setPageLimit page-limit))
       (.build)))
@@ -269,7 +272,9 @@
           (util/close table-txs)))))
 
   (openWatermark [_]
+
     (util/with-close-on-catch [wms (HashMap.)]
+
       (doseq [[table-name ^ILiveTable live-table] tables]
         (.put wms table-name (.openWatermark live-table true)))
 
@@ -279,7 +284,8 @@
         (liveTable [_ table-name] (.get wms table-name))
 
         AutoCloseable
-        (close [_] (util/close wms)))))
+        (close [_]
+          (util/close wms)))))
 
   (finishChunk [_ chunk-idx]
     (let [futs (->> (for [^ILiveTable table (.values tables)]
