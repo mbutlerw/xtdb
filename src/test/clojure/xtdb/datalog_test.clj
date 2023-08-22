@@ -2190,24 +2190,70 @@
                  '{:find [id]
                    :where [(match :foo {:xt/id id})]}))))
 
-(t/deftest test-metadata-filtering-for-time-data-607
+(deftest test-metadata-filtering-for-time-data-607
+  (with-open [node (node/start-node {})]
+    (let [tx (xt/submit-tx node [[:put :xt_docs {:xt/id 1}]])
+          __ (tu/then-await-tx tx node)]
+      (with-open [wm (.openWatermark (:indexer node) tx)]
+        (println "gb")
+        (clojure.pprint/pprint (.getBuffers (.iidVec (.liveTrie (.liveTable (.liveIndex wm) "xt_docs"))) false))
+        (.finish-chunk! (:indexer node))
+        (println "gb")
+        (clojure.pprint/pprint (.getBuffers (.iidVec (.liveTrie (.liveTable (.liveIndex wm) "xt_docs"))) false))))))
+
+(deftest ffff
+  (with-open [node (node/start-node {})]
+    (let [tx (xt/submit-tx node [[:put :xt_docs {:xt/id 1}]])
+          __ (tu/then-await-tx tx node)]
+      (with-open [wm (.openWatermark (:indexer node) tx)]
+        (clojure.pprint/pprint (.liveTrie (.liveTable (.liveIndex wm) "xt_docs")))
+        (.finish-chunk! (:indexer node))
+        (clojure.pprint/pprint (.liveTrie (.liveTable (.liveIndex wm) "xt_docs")))))))
+
+
+
+#_(with-open [node (node/start-node {})]
+    (let [tx (xt/submit-tx node [[:put :xt_docs {:xt/id 1}]])
+          __ (tu/then-await-tx tx node)
+          wm (.openWatermark (:indexer node) tx)]
+      (clojure.pprint/pprint (.liveTrie (.liveTable (.liveIndex wm) "xt_docs")))
+        (.finish-chunk! (:indexer node))
+        (clojure.pprint/pprint (.liveTrie (.liveTable (.liveIndex wm) "xt_docs")))
+      #_(util/close wm)))
+(deftest test-conq
   (with-open [node (node/start-node {:xtdb/indexer {:rows-per-chunk 1}})]
-    (xt/submit-tx node [[:put :xt_docs {:xt/id 1 :start-date #time/date "2000-01-01"}]
-                        [:put :xt_docs {:xt/id 2 :start-date #time/date "3000-01-01"}]])
+    (xt/submit-tx node (vec (take 100 (repeat [:put :xt_docs {:xt/id 1 :start-date #time/date "2000-01-01"}]))))
     (t/is (= [{:id 1}]
              (xt/q node
                    '{:find [id]
                      :where [(match :xt_docs [{:xt/id id} start-date])
                              [(>= start-date #inst "1500")]
                              [(< start-date #inst "2500")]]})))
-    (xt/submit-tx node [[:put :xt_docs2 {:xt/id 1 :start-date #inst "2000-01-01"}]
-                        [:put :xt_docs2 {:xt/id 2 :start-date #inst "3000-01-01"}]])
+    (xt/submit-tx node
+                  (vec (take 100 (repeat [:put :xt_docs2 {:xt/id 1 :start-date #time/date "2000-01-01"}])))
+                  )
     (t/is (= [{:id 1}]
              (xt/q node
                    '{:find [id]
                      :where [(match :xt_docs2 [{:xt/id id} start-date])
                              [(< start-date #time/date "2500-01-01")]
                              [(< start-date #time/date "2500-01-01")]]})))))
+
+
+(deftest test-concurrency
+  (with-open [node (node/start-node {:xtdb/indexer {:rows-per-chunk 1}})]
+    (xt/submit-tx node [[:put :xt_docs {:xt/id 1}]])
+    (t/is (= [{:id 1}]
+             (xt/q node
+                   '{:find [id]
+                     :where [(match :xt_docs [{:xt/id id}])]})))
+    (xt/submit-tx node [[:put :xt_docs2 {:xt/id 1}]])
+    (t/is (= [{:id 1}]
+             (xt/q node
+                   '{:find [id]
+                     :where [(match :xt_docs [{:xt/id id}])]})))))
+
+
 
 (t/deftest bug-non-namespaced-nested-keys-747
   (xt/submit-tx tu/*node* [[:put :bar {:xt/id 1 :foo {:a/b "foo"}}]])
