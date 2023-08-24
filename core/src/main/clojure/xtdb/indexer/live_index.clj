@@ -1,5 +1,6 @@
 (ns xtdb.indexer.live-index
-  (:require [juxt.clojars-mirrors.integrant.core :as ig]
+  (:require [clojure.set :as set]
+            [juxt.clojars-mirrors.integrant.core :as ig]
             [xtdb.buffer-pool]
             [xtdb.object-store]
             [xtdb.trie :as trie]
@@ -22,6 +23,7 @@
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (definterface ILiveTableWatermark
   (^java.util.Map columnTypes [])
+  (^clojure.lang.PersistentVector columnNames [])
   (^xtdb.vector.RelationReader liveRelation [])
   (^xtdb.trie.LiveHashTrie liveTrie []))
 
@@ -143,12 +145,14 @@
 
         (openWatermark [_]
           (locking this-table
-            (let [wm-live-rel (open-wm-live-rel live-rel false)
+            (let [col-names (mapv #(.getKey %) put-doc-wtr)
+                  wm-live-rel (open-wm-live-rel live-rel false)
                   col-types (live-rel->col-types wm-live-rel)
                   wm-live-trie @!transient-trie]
 
               (reify ILiveTableWatermark
                 (columnTypes [_] col-types)
+                (columnNames [_] col-names)
                 (liveRelation [_] wm-live-rel)
                 (liveTrie [_] wm-live-trie)
 
@@ -176,12 +180,14 @@
 
   (openWatermark [this retain?]
     (locking this
-      (let [wm-live-rel (open-wm-live-rel live-rel retain?)
+      (let [col-names (mapv #(.getKey %) put-doc-wtr)
+            wm-live-rel (open-wm-live-rel live-rel retain?)
             col-types (live-rel->col-types wm-live-rel)
             wm-live-trie (.withIidReader ^LiveHashTrie (.live-trie this) (.readerForName wm-live-rel "xt$iid"))]
 
         (reify ILiveTableWatermark
           (columnTypes [_] col-types)
+          (columnNames [_] col-names)
           (liveRelation [_] wm-live-rel)
           (liveTrie [_] wm-live-trie)
 
@@ -258,7 +264,7 @@
                                 (util/->jfn (fn [_] (.openWatermark live-table false)))))
 
             (reify ILiveIndexWatermark
-              (allColumnTypes [_] (update-vals wms #(.columnTypes ^ILiveTableWatermark %)))
+              (allColumnTypes [_] (update-vals wms #(.columnNames ^ILiveTableWatermark %)))
               (liveTable [_ table-name] (.get wms table-name))
 
               AutoCloseable
@@ -276,7 +282,7 @@
         (.put wms table-name (.openWatermark live-table true)))
 
       (reify ILiveIndexWatermark
-        (allColumnTypes [_] (update-vals wms #(.columnTypes ^ILiveTableWatermark %)))
+        (allColumnTypes [_] (update-vals wms #(.columnNames ^ILiveTableWatermark %)))
 
         (liveTable [_ table-name] (.get wms table-name))
 

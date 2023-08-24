@@ -284,7 +284,9 @@
             sq-scope-id (when (and sq-element (not= :collection_derived_table (r/ctor sq-element)))
                           (id sq-element))
             derived-columns (or (derived-columns ag) (:columns cte))
-            known-columns (get *table-info* table-name)]
+            known-columns (into #{} cat
+                                [(get-in *table-info* [:live table-name])
+                                 (get-in *table-info* [:finished table-name])])]
         (with-meta
           (cond-> {:correlation-name correlation-name
                    :id (id ag)
@@ -305,7 +307,10 @@
            :id (id ag)
            :scope-id (id (scope-element ag))
            :table-or-query-name table-name
-           :known-columns (get *table-info* table-name)}
+           :known-columns
+           (into #{} cat
+                 [(get-in *table-info* [:live table-name])
+                  (get-in *table-info* [:finished table-name])])}
           (with-meta {:ref ag})))
 
     (:delete_statement__searched :update_statement__searched :erase_statement__searched)

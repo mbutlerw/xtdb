@@ -645,12 +645,9 @@
                                keys)])))
 
     (allTableColNames [_ wm]
-      (merge-with set/union
-                  (update-vals (.allColumnTypes metadata-mgr)
-                               (comp set keys))
-                  (update-vals (some-> (.liveIndex wm)
-                                       (.allColumnTypes))
-                               (comp set keys))))
+      {:finished (update-vals (.allColumnTypes metadata-mgr) keys)
+       :live (some-> (.liveIndex wm)
+                     (.allColumnTypes))})
 
     (scanColTypes [_ wm scan-cols]
       (letfn [(->col-type [[table col-name]]
