@@ -18,7 +18,7 @@ jobs:
       - name: Test
         uses: gradle/gradle-build-action@v2.6.1
         with:
-          arguments: test
+          arguments: test --info
           cache-read-only: ${{ github.ref != 'refs/heads/2.x' }}
       - name: Upload build reports
         if: success() || failure() # i.e. not cancelled
@@ -48,7 +48,7 @@ jobs:
       - name: Integration Test
         uses: gradle/gradle-build-action@v2.6.1
         with:
-          arguments: integration-test
+          arguments: integration-test --info
           cache-read-only: ${{ github.ref != 'refs/heads/2.x' }}
       - name: Upload build reports
         if: success() || failure() # i.e. not cancelled
@@ -71,7 +71,7 @@ jobs:
       - name: SLT 1
         uses: gradle/gradle-build-action@v2.6.1
         with:
-          arguments: slt-test
+          arguments: slt-test --info
           cache-read-only: ${{ github.ref != 'refs/heads/2.x' }}
 
   slt-2:
@@ -88,5 +88,5 @@ jobs:
       - name: SLT 2
         uses: gradle/gradle-build-action@v2.6.1
         with:
-          arguments: slt-test-2
+          arguments: slt-test-2 --info
           cache-read-only: ${{ github.ref != 'refs/heads/2.x' }}
