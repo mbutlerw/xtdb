@@ -1,6 +1,6 @@
 (ns xtdb.test-util
   (:require [clojure.spec.alpha :as s]
-            [clojure.test :as t]
+            [clojure.test :as t :refer [deftest]]
             [juxt.clojars-mirrors.integrant.core :as ig]
             [xtdb.api.protocols :as api]
             [xtdb.client :as client]
@@ -42,7 +42,7 @@
     (binding [*allocator* allocator]
       (f))))
 
-(t/deftest test-memory-leak-doesnt-mask-original-error
+(deftest test-memory-leak-doesnt-mask-original-error
   (t/is (thrown? ExceptionInfo
                  (with-allocator
                    (fn []
@@ -105,7 +105,7 @@
 
 (defn then-await-tx
   (^xtdb.api.protocols.TransactionInstant [tx node]
-   (then-await-tx tx node nil))
+   (then-await-tx tx node (Duration/ofSeconds 60)))
 
   (^xtdb.api.protocols.TransactionInstant [tx node ^Duration timeout]
    @(.awaitTxAsync ^IIndexer (util/component node :xtdb/indexer) tx timeout)))
