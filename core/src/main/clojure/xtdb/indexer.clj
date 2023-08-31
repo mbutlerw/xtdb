@@ -545,11 +545,13 @@
 
             tx-key)))
 
-      (await/notify-tx tx-key awaiters)
+      (locking awaiters
+        (await/notify-tx tx-key awaiters))
 
       (catch Throwable t
         (set! (.indexer-error this) t)
-        (await/notify-ex t awaiters)
+        (locking awaiters
+          (await/notify-ex t awaiters))
         (throw t))))
 
   (forceFlush [this tx-key expected-last-chunk-tx-id]
@@ -592,10 +594,11 @@
 
   (awaitTxAsync [_ tx timeout]
     (-> (if tx
-          (await/await-tx-async tx
-                                #(or (some-> indexer-error throw)
-                                     latest-completed-tx)
-                                awaiters)
+          (locking awaiters
+            (await/await-tx-async tx
+                                  #(or (some-> indexer-error throw)
+                                       latest-completed-tx)
+                                  awaiters))
           (CompletableFuture/completedFuture latest-completed-tx))
         (cond-> timeout (.orTimeout (.toMillis timeout) TimeUnit/MILLISECONDS))))
 
