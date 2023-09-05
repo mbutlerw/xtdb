@@ -15,11 +15,13 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-      - name: Test
+      - name: Setup Gradle
         uses: gradle/gradle-build-action@v2.6.1
+      - name: Test
+        run: ./gradlew test
         with:
-          arguments: test
           cache-read-only: ${{ github.ref != 'refs/heads/2.x' }}
+
       - name: Upload build reports
         if: success() || failure() # i.e. not cancelled
         uses: actions/upload-artifact@v3
@@ -45,10 +47,11 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-      - name: Integration Test
+      - name: Setup Gradle
         uses: gradle/gradle-build-action@v2.6.1
+      - name: Integration Test
+        run: ./gradlew integration-test
         with:
-          arguments: integration-test
           cache-read-only: ${{ github.ref != 'refs/heads/2.x' }}
       - name: Upload build reports
         if: success() || failure() # i.e. not cancelled
@@ -68,10 +71,11 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-      - name: SLT 1
+      - name: Setup Gradle
         uses: gradle/gradle-build-action@v2.6.1
+      - name: SLT 1
+        run: ./gradlew slt-test
         with:
-          arguments: slt-test
           cache-read-only: ${{ github.ref != 'refs/heads/2.x' }}
 
   slt-2:
@@ -85,8 +89,9 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-      - name: SLT 2
+      - name: Setup Gradle
         uses: gradle/gradle-build-action@v2.6.1
+      - name: SLT 2
+        run: ./gradlew slt-test-2
         with:
-          arguments: slt-test-2
           cache-read-only: ${{ github.ref != 'refs/heads/2.x' }}
