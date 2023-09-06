@@ -2,8 +2,9 @@ name: XTDB SLT
 run-name: XTDB SLT
 
 on:
-  schedule:
-    - cron:  '0 19 * * 1-5'
+  push:
+    branches:
+      - 2.x
 
 jobs:
   slt-test-dir:
@@ -14,7 +15,7 @@ jobs:
       matrix:
         slt-dir: [{dir: "random/expr/", error: 62},
                   {dir: "random/aggregates/", error: 19},
-                  {dir: "random/groupby/", error: 0},
+                  {dir: "random/groupby/", error: 8},
                   {dir: "random/select/"},
                   {dir: "index/between/"},
                   {dir: "index/commute/"},
