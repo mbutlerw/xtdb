@@ -3,7 +3,7 @@ run-name: XTDB SLT
 
 on:
   schedule:
-    - cron:  '15 15 * * 1-5'
+    - cron:  '30 15 * * 1-5'
 
 jobs:
   slt-test-dir:
