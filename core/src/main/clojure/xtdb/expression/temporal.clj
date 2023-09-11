@@ -951,9 +951,9 @@
         to (util/micros->instant to-µs)]
     (err/runtime-err :core2.temporal/invalid-period
                      {::err/message
-                      (format "From cannot be greater than to when constructing a period - from: %s, to %s" from to)
-                      :from from
-                      :to to})))
+                      (format "From cannot be greater than to when constructing a period - xt/from: %s, xt/to: %s" from to)
+                      :xt/from from
+                      :xt/to to})))
 
 (defn ->period ^IStructValueReader [^long from, ^long to]
   ;; TODO error assumes micros
@@ -963,20 +963,20 @@
     (reify IStructValueReader
       (readLong [_ field]
         (case field
-          "from" from
-          "to" to))))
+          "xt$from" from
+          "xt$to" to))))
 
 (defmethod expr/codegen-call [:period :timestamp-tz :timestamp-tz] [{[from-type to-type] :arg-types}]
-  {:return-type [:struct {'from from-type, 'to to-type}]
+  {:return-type [:struct {'xt$from from-type, 'xt$to to-type}]
    :->call-code (fn [[from-code to-code]]
                   (-> `(->period ~from-code ~to-code)
                       (expr/with-tag IStructValueReader)))})
 
 (defn from ^long [^IStructValueReader period]
-  (.readLong period "from"))
+  (.readLong period "xt$from"))
 
 (defn to ^long [^IStructValueReader period]
-  (.readLong period "to"))
+  (.readLong period "xt$to"))
 
 (defn temporal-contains-point? [^IStructValueReader p1 ^long ts]
   (and (<= (from p1) ts)

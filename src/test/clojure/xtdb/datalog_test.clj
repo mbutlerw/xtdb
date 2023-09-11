@@ -1911,10 +1911,10 @@
                             [:put :xt_cats {:xt/id 2} {:for-valid-time [:in #inst "2016" #inst "2018"]}]])
 
   (t/is (= [{:xt/id 1, :id2 2,
-             :xt_docs_app_time {:from #time/zoned-date-time "2015-01-01T00:00Z[UTC]",
-                                :to #time/zoned-date-time "2020-01-01T00:00Z[UTC]"},
-             :xt_cats_app_time {:from #time/zoned-date-time "2016-01-01T00:00Z[UTC]",
-                                :to #time/zoned-date-time "2018-01-01T00:00Z[UTC]"}}]
+             :xt_docs_app_time {:xt/from #time/zoned-date-time "2015-01-01T00:00Z[UTC]",
+                                :xt/to #time/zoned-date-time "2020-01-01T00:00Z[UTC]"},
+             :xt_cats_app_time {:xt/from #time/zoned-date-time "2016-01-01T00:00Z[UTC]",
+                                :xt/to #time/zoned-date-time "2018-01-01T00:00Z[UTC]"}}]
            (xt/q
             tu/*node*
             '{:find [xt/id id2 xt_docs_app_time xt_cats_app_time]
@@ -1925,10 +1925,10 @@
                       [(contains? xt_docs_app_time xt_cats_app_time)]]})))
 
   (t/is (= [{:xt/id 1, :id2 2,
-             :xt_docs_sys_time {:from #time/zoned-date-time "2020-01-01T00:00Z[UTC]",
-                                :to #time/zoned-date-time "9999-12-31T23:59:59.999999Z[UTC]"},
-             :xt_cats_sys_time {:from #time/zoned-date-time "2020-01-01T00:00Z[UTC]",
-                                :to #time/zoned-date-time "9999-12-31T23:59:59.999999Z[UTC]"}}]
+             :xt_docs_sys_time {:xt/from #time/zoned-date-time "2020-01-01T00:00Z[UTC]",
+                                :xt/to #time/zoned-date-time "9999-12-31T23:59:59.999999Z[UTC]"},
+             :xt_cats_sys_time {:xt/from #time/zoned-date-time "2020-01-01T00:00Z[UTC]",
+                                :xt/to #time/zoned-date-time "9999-12-31T23:59:59.999999Z[UTC]"}}]
            (xt/q
             tu/*node*
             '{:find [xt/id id2 xt_docs_sys_time xt_cats_sys_time]
@@ -1941,8 +1941,8 @@
                       [(equals? xt_docs_sys_time xt_cats_sys_time)]]}))))
 
 (deftest test-period-constructor
-  (t/is (= [{:p1 {:from #time/zoned-date-time "2018-01-01T00:00Z[UTC]",
-                  :to #time/zoned-date-time "2022-01-01T00:00Z[UTC]"}}]
+  (t/is (= [{:p1 {:xt/from #time/zoned-date-time "2018-01-01T00:00Z[UTC]",
+                  :xt/to #time/zoned-date-time "2022-01-01T00:00Z[UTC]"}}]
            (xt/q
              tu/*node*
              '{:find [p1],
@@ -1961,8 +1961,8 @@
 
 
   (t/is (= [{:xt/id 1,
-             :app_time {:from #time/zoned-date-time "2015-01-01T00:00Z[UTC]",
-                        :to #time/zoned-date-time "2050-01-01T00:00Z[UTC]"},
+             :app_time {:xt/from #time/zoned-date-time "2015-01-01T00:00Z[UTC]",
+                        :xt/to #time/zoned-date-time "2050-01-01T00:00Z[UTC]"},
              :xt/valid-from #time/zoned-date-time "2015-01-01T00:00Z[UTC]",
              :app-time-to #time/zoned-date-time "2050-01-01T00:00Z[UTC]"}]
            (xt/q
@@ -1976,10 +1976,10 @@
         "projecting both period and underlying cols")
 
   (t/is (= [{:xt/id 1,
-             :app_time {:from #time/zoned-date-time "2015-01-01T00:00Z[UTC]",
-                        :to #time/zoned-date-time "2050-01-01T00:00Z[UTC]"},
-             :sys_time {:from #time/zoned-date-time "2020-01-01T00:00Z[UTC]",
-                        :to #time/zoned-date-time "9999-12-31T23:59:59.999999Z[UTC]"}}]
+             :app_time {:xt/from #time/zoned-date-time "2015-01-01T00:00Z[UTC]",
+                        :xt/to #time/zoned-date-time "2050-01-01T00:00Z[UTC]"},
+             :sys_time {:xt/from #time/zoned-date-time "2020-01-01T00:00Z[UTC]",
+                        :xt/to #time/zoned-date-time "9999-12-31T23:59:59.999999Z[UTC]"}}]
            (xt/q
             tu/*node*
             '{:find [xt/id app_time sys_time]
@@ -1990,8 +1990,8 @@
         "projecting both app and system-time periods")
 
   (t/is (= [#:xt{:valid-time
-                 {:from #time/zoned-date-time "2015-01-01T00:00Z[UTC]",
-                  :to #time/zoned-date-time "2050-01-01T00:00Z[UTC]"}}]
+                 {:xt/from #time/zoned-date-time "2015-01-01T00:00Z[UTC]",
+                  :xt/to #time/zoned-date-time "2050-01-01T00:00Z[UTC]"}}]
            (xt/q
             tu/*node*
             '{:find [xt/valid-time]
@@ -2002,10 +2002,10 @@
 
   (t/is (= [{:xt/id 1
              :id2 1,
-             :app_time {:from #time/zoned-date-time "2015-01-01T00:00Z[UTC]",
-                        :to #time/zoned-date-time "2050-01-01T00:00Z[UTC]"},
-             :sys_time {:from #time/zoned-date-time "2020-01-01T00:00Z[UTC]",
-                        :to #time/zoned-date-time "9999-12-31T23:59:59.999999Z[UTC]"}}]
+             :app_time {:xt/from #time/zoned-date-time "2015-01-01T00:00Z[UTC]",
+                        :xt/to #time/zoned-date-time "2050-01-01T00:00Z[UTC]"},
+             :sys_time {:xt/from #time/zoned-date-time "2020-01-01T00:00Z[UTC]",
+                        :xt/to #time/zoned-date-time "9999-12-31T23:59:59.999999Z[UTC]"}}]
            (xt/q
             tu/*node*
             '{:find [xt/id id2 app_time sys_time]
@@ -2023,8 +2023,8 @@
   (xt/submit-tx tu/*node* '[[:put :xt_docs {:xt/id 2}]])
 
   (t/is (= [{:xt/id 2,
-             :time {:from #time/zoned-date-time "2020-01-02T00:00Z[UTC]",
-                    :to #time/zoned-date-time "9999-12-31T23:59:59.999999Z[UTC]"}}]
+             :time {:xt/from #time/zoned-date-time "2020-01-02T00:00Z[UTC]",
+                    :xt/to #time/zoned-date-time "9999-12-31T23:59:59.999999Z[UTC]"}}]
            (xt/q
             tu/*node*
             '{:find [xt/id time]
@@ -2035,13 +2035,13 @@
         "period unification within match")
 
   (xt/submit-tx tu/*node* '[[:put :xt_docs
-                             {:xt/id 3 :c {:from #inst "2015" :to #inst "2050"}}
+                             {:xt/id 3 :c {:xt/from #inst "2015" :xt/to #inst "2050"}}
                              {:for-valid-time [:in #inst "2015" #inst "2050"]}]])
 
   (t/is (= [{:xt/id 3,
              :time
-             {:from #time/zoned-date-time "2015-01-01T00:00Z[UTC]",
-              :to #time/zoned-date-time "2050-01-01T00:00Z[UTC]"}}]
+             {:xt/from #time/zoned-date-time "2015-01-01T00:00Z[UTC]",
+              :xt/to #time/zoned-date-time "2050-01-01T00:00Z[UTC]"}}]
            (xt/q
             tu/*node*
             '{:find [xt/id time]
@@ -2343,24 +2343,24 @@
     (t/is (=
            #{{:n 0,
               :valid-time
-              {:from #time/zoned-date-time "2020-01-01T00:00Z[UTC]",
-               :to #time/zoned-date-time "2020-01-02T00:00Z[UTC]"}}
+              {:xt/from #time/zoned-date-time "2020-01-01T00:00Z[UTC]",
+               :xt/to #time/zoned-date-time "2020-01-02T00:00Z[UTC]"}}
              {:n 1,
               :valid-time
-              {:from #time/zoned-date-time "2020-01-02T00:00Z[UTC]",
-               :to #time/zoned-date-time "2020-01-03T00:00Z[UTC]"}}
+              {:xt/from #time/zoned-date-time "2020-01-02T00:00Z[UTC]",
+               :xt/to #time/zoned-date-time "2020-01-03T00:00Z[UTC]"}}
              {:n 2,
               :valid-time
-              {:from #time/zoned-date-time "2020-01-03T00:00Z[UTC]",
-               :to #time/zoned-date-time "2020-01-04T00:00Z[UTC]"}}
+              {:xt/from #time/zoned-date-time "2020-01-03T00:00Z[UTC]",
+               :xt/to #time/zoned-date-time "2020-01-04T00:00Z[UTC]"}}
              {:n 3,
               :valid-time
-              {:from #time/zoned-date-time "2020-01-04T00:00Z[UTC]",
-               :to #time/zoned-date-time "2020-01-05T00:00Z[UTC]"}}
+              {:xt/from #time/zoned-date-time "2020-01-04T00:00Z[UTC]",
+               :xt/to #time/zoned-date-time "2020-01-05T00:00Z[UTC]"}}
              {:n 4,
               :valid-time
-              {:from #time/zoned-date-time "2020-01-05T00:00Z[UTC]",
-               :to #time/zoned-date-time "2020-01-06T00:00Z[UTC]"}}}
+              {:xt/from #time/zoned-date-time "2020-01-05T00:00Z[UTC]",
+               :xt/to #time/zoned-date-time "2020-01-06T00:00Z[UTC]"}}}
            (set (xt/q node '{:find [n valid-time] :where [($ :ints {:n n :xt/id 0 :xt/valid-time valid-time}
                                                              {:for-valid-time [:in #inst "2020-01-01" #inst "2020-01-06"]})]}))))))
 
