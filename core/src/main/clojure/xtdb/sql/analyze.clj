@@ -554,6 +554,12 @@
                 [(-> {:identifier (identifier id)}
                      (vary-meta assoc :ref us))])))))
 
+(def valid-time-cols #{"xt$valid_from" "xt$valid_to"})
+(def system-time-cols #{"xt$system_from" "xt$system_to"})
+(def temporal-cols (set/union valid-time-cols system-time-cols))
+(def valid-time-col? (comp valid-time-cols :identifier))
+(def temporal-col? (comp temporal-cols :identifier))
+
 (defn projected-columns
   "Returns a vector of candidates for the projected-cols of an expression.
 
@@ -597,6 +603,9 @@
                 (let [projections (if (r/ctor? :qualified_join (r/$ ag 1))
                                     (r/collect-stop expand-asterisk (r/$ ag 1))
                                     (first (projected-columns ag)))
+                      projections (remove temporal-col? projections)
+                      ;;we explicitly choose not to project temmporal cols as part of *
+                      ;;so that it can be used to roundtrip documents
                       {:keys [grouping-columns]} (local-env (group-env ag))]
                   (if grouping-columns
                     (let [grouping-columns (set grouping-columns)]

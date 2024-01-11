@@ -1197,3 +1197,44 @@
   ;; Postgres doesn't allow deliminated col refs in order-by exprs but mysql/sqlite do
   #_(t/is (= [{:b 1} {:b 2} {:b 3}]
            (xt/q tu/*node* "SELECT docs.x AS b FROM docs ORDER BY (b + 2)"))))
+
+(deftest test-select-star-temporal-cols-3085
+  (xt/submit-tx tu/*node* [(xt/put :docs {:xt/id 1 :x 3})
+                           (xt/put :docs {:xt/id 2 :x 2})])
+
+  (t/is (= #{{:xt/system-from #time/zoned-date-time "2020-01-01T00:00Z[UTC]",
+              :x 2,
+              :xt/id 2}
+             {:xt/system-from #time/zoned-date-time "2020-01-01T00:00Z[UTC]",
+              :x 3,
+              :xt/id 1}}
+           (set (xt/q tu/*node* "select docs.*, docs.xt$system_from from docs for all system_time"))))
+
+  (t/is (= #{{:xt/system-from #time/zoned-date-time "2020-01-01T00:00Z[UTC]",
+              :xt/system-to nil,
+              :x 2,
+              :xt/id 2}
+             {:xt/system-from #time/zoned-date-time "2020-01-01T00:00Z[UTC]",
+              :xt/system-to nil,
+              :x 3,
+              :xt/id 1}}
+           (set (xt/q tu/*node* "select docs.*, docs.xt$system_from, docs.xt$system_to from docs for all system_time"))))
+
+  (t/is (= #{{:xt/valid-from #time/zoned-date-time "2020-01-01T00:00Z[UTC]",
+              :xt/valid-to nil,
+              :xt/system-from #time/zoned-date-time "2020-01-01T00:00Z[UTC]",
+              :xt/system-to nil,
+              :x 2,
+              :xt/id 2}
+             {:xt/valid-from #time/zoned-date-time "2020-01-01T00:00Z[UTC]",
+              :xt/valid-to nil,
+              :xt/system-from #time/zoned-date-time "2020-01-01T00:00Z[UTC]",
+              :xt/system-to nil,
+              :x 3,
+              :xt/id 1}}
+           (set (xt/q tu/*node* "select docs.*, docs.xt$system_from, docs.xt$system_to, docs.xt$valid_from, docs.xt$valid_to
+                                 from docs for all system_time"))))
+
+  (t/is (= #{{:y #time/zoned-date-time "2020-01-01T00:00Z[UTC]", :x 2, :xt/id 2}
+             {:y #time/zoned-date-time "2020-01-01T00:00Z[UTC]", :x 3, :xt/id 1}}
+           (set (xt/q tu/*node* "select docs.*, docs.xt$system_from AS y from docs for all system_time")))))

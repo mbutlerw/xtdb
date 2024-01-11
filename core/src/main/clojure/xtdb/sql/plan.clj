@@ -1565,8 +1565,6 @@
           (wrap-with-select sc rel)
           rel))]]))
 
-(def app-time-col? (comp #{"xt$valid_from" "xt$valid_to"} :identifier))
-
 (defn plan-qualified-join [join-type lhs rhs sc]
   (let [planned-rhs (apply reduce
                            (fn [acc predicate]
@@ -1593,10 +1591,10 @@
     [:insert {:table (sem/identifier table)}
      (let [inner-plan (plan from-subquery)
            projection (first (sem/projected-columns z))]
-       (if (some app-time-col? projection)
+       (if (some sem/valid-time-col? projection)
          [:project (vec (for [col projection]
                           (let [col-sym (unqualified-projection-symbol col)]
-                            (if (app-time-col? col)
+                            (if (sem/valid-time-col? col)
                               {col-sym `(~'cast-tstz ~col-sym)}
                               col-sym))))
           inner-plan]
