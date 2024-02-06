@@ -554,6 +554,41 @@
                 [(-> {:identifier (identifier id)}
                      (vary-meta assoc :ref us))])))))
 
+(defn expand-asterisk [ag]
+  (r/zcase ag
+    :table_primary
+    (do
+      (let [{:keys [known-columns correlation-name derived-columns] :as table} (table ag)
+            projections
+            (if-let [derived-columns (not-empty derived-columns)]
+              (for [identifier derived-columns]
+                {:identifier identifier})
+              (map #(hash-map :identifier %) known-columns))
+            #_(if (r/ctor? :qualified_join (r/$ ag 1))
+                (r/collect-stop expand-asterisk (r/$ ag 1))
+                (first (projected-columns ag)))
+            #_#_{:keys [grouping-columns]} (local-env (group-env ag))]
+        (map-indexed
+         (fn [idx {:keys [identifier index outer-name]}]
+           (cond-> (with-meta {:index idx} {:table table})
+             identifier (assoc :identifier identifier)
+             (and index (nil? identifier)) (assoc :original-index index)
+             correlation-name (assoc :qualified-column [correlation-name identifier])
+             outer-name (assoc :inner-name outer-name)))
+         projections)
+
+        #_(if grouping-columns
+            (let [grouping-columns (set grouping-columns)]
+              (for [{:keys [qualified-column] :as projection} projections
+                    :when (contains? grouping-columns qualified-column)]
+                projection))
+            projections)))
+
+    :subquery
+    []
+
+    nil))
+
 (defn projected-columns
   "Returns a vector of candidates for the projected-cols of an expression.
 
@@ -574,36 +609,48 @@
                                   named-join-columns (for [identifier (named-columns-join-columns (r/parent ag))]
                                                        {:identifier identifier})
                                   column-references (all-column-references query-expression)
-                                  known-columns (map #(hash-map :identifier %) known-columns)]
+                                  columns-from-asterisk (map #(select-keys % [:identifier]) (expand-asterisk ag)) #_(map #(hash-map :identifier %) known-columns)]
                               (->> (for [{:keys [identifiers] column-table-id :table-id} column-references
                                          :when (= table-id column-table-id)]
                                      {:identifier (last identifiers)})
                                    (concat named-join-columns)
-                                   (concat known-columns)
+                                   (concat columns-from-asterisk)
                                    (distinct)))))]
         [(map-indexed
-           (fn [idx {:keys [identifier index outer-name]}]
-             (cond-> (with-meta {:index idx} {:table table})
-               identifier (assoc :identifier identifier)
-               (and index (nil? identifier)) (assoc :original-index index)
-               correlation-name (assoc :qualified-column [correlation-name identifier])
-               outer-name (assoc :inner-name outer-name)))
-           projections)]))
+          (fn [idx {:keys [identifier index outer-name]}]
+            (cond-> (with-meta {:index idx} {:table table})
+              identifier (assoc :identifier identifier)
+              (and index (nil? identifier)) (assoc :original-index index)
+              correlation-name (assoc :qualified-column [correlation-name identifier])
+              outer-name (assoc :inner-name outer-name)))
+          projections)]))
 
     :query_specification
-    (letfn [(expand-asterisk [ag]
+    (letfn [#_(expand-asterisk [ag]
               (r/zcase ag
                 :table_primary
-                (let [projections (if (r/ctor? :qualified_join (r/$ ag 1))
-                                    (r/collect-stop expand-asterisk (r/$ ag 1))
-                                    (first (projected-columns ag)))
-                      {:keys [grouping-columns]} (local-env (group-env ag))]
-                  (if grouping-columns
-                    (let [grouping-columns (set grouping-columns)]
-                      (for [{:keys [qualified-column] :as projection} projections
-                            :when (contains? grouping-columns qualified-column)]
-                        projection))
-                    projections))
+                (do
+                  (let [{:keys [known-columns correlation-name] :as table} (table ag)
+                        projections (map #(hash-map :identifier %) known-columns) #_(if (r/ctor? :qualified_join (r/$ ag 1))
+                                        (r/collect-stop expand-asterisk (r/$ ag 1))
+                                        (first (projected-columns ag)))
+                          #_#_{:keys [grouping-columns]} (local-env (group-env ag))]
+                    (prn :expand-ast known-columns)
+                    (map-indexed
+                     (fn [idx {:keys [identifier index outer-name]}]
+                       (cond-> (with-meta {:index idx} {:table table})
+                         identifier (assoc :identifier identifier)
+                         (and index (nil? identifier)) (assoc :original-index index)
+                         correlation-name (assoc :qualified-column [correlation-name identifier])
+                         outer-name (assoc :inner-name outer-name)))
+                     projections)
+
+                      #_(if grouping-columns
+                          (let [grouping-columns (set grouping-columns)]
+                            (for [{:keys [qualified-column] :as projection} projections
+                                  :when (contains? grouping-columns qualified-column)]
+                              projection))
+                          projections)))
 
                 :subquery
                 []

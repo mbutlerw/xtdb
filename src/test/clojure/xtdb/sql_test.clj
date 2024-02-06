@@ -279,9 +279,9 @@
     ;; https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/tr-2000-31.pdf "Parameterized Queries and Nesting Equivalences"
     (t/is (=plan-file
             "decorrelation-2"
-            (plan-sql "SELECT * FROM customers
+            (plan-sql "SELECT * FROM customers AS customers(country, custno)
                       WHERE customers.country = 'Mexico' AND
-                      EXISTS (SELECT * FROM orders WHERE customers.custno = orders.custno)")))
+                      EXISTS (SELECT * FROM orders AS orders(custno) WHERE customers.custno = orders.custno)")))
 
     ;; NOTE: these below simply check what's currently being produced,
     ;; not necessarily what should be produced.
@@ -1197,3 +1197,20 @@
   ;; Postgres doesn't allow deliminated col refs in order-by exprs but mysql/sqlite do
   #_(t/is (= [{:b 1} {:b 2} {:b 3}]
            (xt/q tu/*node* "SELECT docs.x AS b FROM docs ORDER BY (b + 2)"))))
+
+(deftest testd-derived-column-refs
+  (xt/submit-tx tu/*node* [[:put-docs :docs {:xt/id 1 :x 3 :y "a"}]
+                           [:put-docs :docs {:xt/id 2 :x 2 :y "b"}]
+                           [:put-docs :docs {:xt/id 3 :x 1 :y "c"}]])
+
+  #_(t/is (= [{:b 2} {:b 3} {:b 4}]
+           (xt/q tu/*node* "SELECT docs.y FROM docs")))
+  (println "========")
+#_(t/is (= [{:b 2} {:b 3} {:b 4}]
+             (xt/q tu/*node* "SELECT docs.*, docs.y AS bar FROM docs")))
+  #_(t/is (= [{:b 2} {:b 3} {:b 4}]
+             (xt/q tu/*node* "SELECT docs.*, docs.y FROM docs")))
+  #_(t/is (= [{:b 2} {:b 3} {:b 4}]
+             (xt/q tu/*node* "SELECT docs.*, docs.xt$valid_from FROM docs")))
+  (t/is (= [{:b 2} {:b 3} {:b 4}]
+             (xt/q tu/*node* "SELECT docs.*, docs.xt$valid_from FROM docs WHERE docs.xt$system_to = 1 "))))
