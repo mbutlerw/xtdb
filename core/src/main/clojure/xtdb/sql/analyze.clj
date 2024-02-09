@@ -25,7 +25,7 @@
 ;; - grouping column check for asterisks should really expand and then fail.
 ;; - named columns join should only output single named columns: COALESCE(lhs.x, rhs.x) AS x
 
-(def ^:dynamic *table-info*)
+(def ^:dynamic *table-info* nil)
 
 (defn- enter-env-scope
   ([env]
@@ -558,31 +558,32 @@
   (r/zcase ag
     :table_primary
     (do
-      (let [{:keys [known-columns correlation-name derived-columns] :as table} (table ag)
-            projections
-            (if-let [derived-columns (not-empty derived-columns)]
-              (for [identifier derived-columns]
-                {:identifier identifier})
-              (map #(hash-map :identifier %) known-columns))
-            #_(if (r/ctor? :qualified_join (r/$ ag 1))
-                (r/collect-stop expand-asterisk (r/$ ag 1))
-                (first (projected-columns ag)))
-            #_#_{:keys [grouping-columns]} (local-env (group-env ag))]
-        (map-indexed
-         (fn [idx {:keys [identifier index outer-name]}]
-           (cond-> (with-meta {:index idx} {:table table})
-             identifier (assoc :identifier identifier)
-             (and index (nil? identifier)) (assoc :original-index index)
-             correlation-name (assoc :qualified-column [correlation-name identifier])
-             outer-name (assoc :inner-name outer-name)))
-         projections)
-
-        #_(if grouping-columns
-            (let [grouping-columns (set grouping-columns)]
-              (for [{:keys [qualified-column] :as projection} projections
-                    :when (contains? grouping-columns qualified-column)]
-                projection))
-            projections)))
+      (let [{:keys [known-columns correlation-name derived-columns] :as table} (table ag)]
+        (let [projections
+              (if-let [derived-columns (not-empty derived-columns)]
+                (for [identifier derived-columns]
+                  {:identifier identifier})
+                (if-let [subquery-ref (:subquery-ref (meta table))]
+                  (first (projected-columns subquery-ref))
+                  (map #(hash-map :identifier %) known-columns)))
+              grouping-columns (:grouping-columns (local-env (group-env ag)))
+               grouping-columns-set (set grouping-columns)]
+             (->>
+              projections
+              (map-indexed
+               (fn [idx {:keys [identifier index outer-name]}]
+                 (cond-> (with-meta {:index idx} {:table table})
+                   identifier (assoc :identifier identifier)
+                   (and index (nil? identifier)) (assoc :original-index index)
+                   correlation-name (assoc :qualified-column [correlation-name identifier])
+                   outer-name (assoc :inner-name outer-name))))
+              (map #(if (and grouping-columns
+                             (not (contains? grouping-columns-set (:qualified-column %))))
+                      ;; TODO to be spec compliant this should really be as test for functional
+                      ;; dependency given our current lack of schema/index/unique constraints
+                      ;; this could prove hard, but we could explicitly look for xt/id
+                      (assoc % :invalid-ref-to-non-grouping-col true)
+                      %))))))
 
     :subquery
     []
@@ -598,7 +599,7 @@
   (r/zcase ag
     :table_primary
     (when-not (r/ctor? :qualified_join (r/$ ag 1))
-      (let [{:keys [correlation-name derived-columns known-columns], table-id :id, :as table} (table ag)
+      (let [{:keys [correlation-name derived-columns], table-id :id, :as table} (table ag)
             projections (if-let [derived-columns (not-empty derived-columns)]
                           (for [identifier derived-columns]
                             {:identifier identifier})
@@ -626,38 +627,7 @@
           projections)]))
 
     :query_specification
-    (letfn [#_(expand-asterisk [ag]
-              (r/zcase ag
-                :table_primary
-                (do
-                  (let [{:keys [known-columns correlation-name] :as table} (table ag)
-                        projections (map #(hash-map :identifier %) known-columns) #_(if (r/ctor? :qualified_join (r/$ ag 1))
-                                        (r/collect-stop expand-asterisk (r/$ ag 1))
-                                        (first (projected-columns ag)))
-                          #_#_{:keys [grouping-columns]} (local-env (group-env ag))]
-                    (prn :expand-ast known-columns)
-                    (map-indexed
-                     (fn [idx {:keys [identifier index outer-name]}]
-                       (cond-> (with-meta {:index idx} {:table table})
-                         identifier (assoc :identifier identifier)
-                         (and index (nil? identifier)) (assoc :original-index index)
-                         correlation-name (assoc :qualified-column [correlation-name identifier])
-                         outer-name (assoc :inner-name outer-name)))
-                     projections)
-
-                      #_(if grouping-columns
-                          (let [grouping-columns (set grouping-columns)]
-                            (for [{:keys [qualified-column] :as projection} projections
-                                  :when (contains? grouping-columns qualified-column)]
-                              projection))
-                          projections)))
-
-                :subquery
-                []
-
-                nil))
-
-            (calculate-select-list [ag]
+    (letfn [(calculate-select-list [ag]
               (r/zcase ag
                 :asterisk
                 (let [table-expression (r/right (r/parent ag))]
@@ -686,8 +656,8 @@
         [(->> projections
               (generate-unique-column-names)
               (map-indexed
-                (fn [idx projection]
-                  (assoc projection :index idx))))]))
+               (fn [idx projection]
+                 (assoc projection :index idx))))]))
 
     :query_expression
     (let [query-expression-body (if (r/ctor? :with_clause (r/$ ag 1))
@@ -697,6 +667,7 @@
                          [:identifier :index :normal-form :outer-name]
                          [:identifier :index :outer-name])
           projs (projected-columns query-expression-body)]
+
       (vec (for [projections projs]
              (vec (for [projection projections]
                     (select-keys projection keys-to-keep))))))
@@ -1116,9 +1087,18 @@
                          (->line-info-str ag))]))))
 
 (defn- check-select-list [ag]
-  (when (= [[]] (projected-columns ag))
-    [(format "Query does not select any columns: %s"
-             (->line-info-str ag))]))
+  (let [projections (projected-columns ag)]
+
+    (when (= [[]] projections)
+      [(format "Query does not select any columns: %s"
+               (->line-info-str ag))])
+
+    (keep
+     #(when (:invalid-ref-to-non-grouping-col %)
+        (format "Column %s must appear in GROUP BY clause or be used in aggregate function: %s"
+                (str/join "." (:qualified-column %))
+                (->line-info-str ag)))
+     (first projections))))
 
 (defn- check-asterisked-identifier-chain [ag]
   (let [identifiers (identifiers ag)]
