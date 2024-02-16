@@ -29,10 +29,10 @@ val defaultJvmArgs = listOf(
 )
 
 val sixGBJvmArgs = listOf(
-    "-Xmx2g",
-    "-Xms2g",
-    "-XX:MaxDirectMemorySize=3g",
-    "-XX:MaxMetaspaceSize=1g"
+    "-Xmx4g",
+    "-Xms4g",
+    "-XX:MaxDirectMemorySize=6g",
+    "-XX:MaxMetaspaceSize=2g"
 )
 
 java.toolchain.languageVersion.set(JavaLanguageVersion.of(17))
