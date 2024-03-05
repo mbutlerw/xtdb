@@ -1633,3 +1633,19 @@
     "test-sql-over-scanning-asterisk-from-subquery"
     (plan-sql
      "SELECT bar.* FROM (SELECT foo.a, foo.b FROM foo) AS bar"))))
+
+(deftest test-schema-qualified-names
+  (t/is
+   (=plan-file
+    "test-schema-qualified-names-simple"
+    (plan-sql "SELECT information_schema.columns.column_name FROM information_schema.columns")))
+
+  (t/is
+   (=plan-file
+    "test-schema-qualified-names-alias"
+   (plan-sql "SELECT cols.column_name FROM information_schema.columns AS cols")))
+
+  (t/is
+   (=plan-file
+    "test-schema-qualified-names-field"
+    (plan-sql "SELECT information_schema.columns.column_name.my_field FROM information_schema.columns"))))

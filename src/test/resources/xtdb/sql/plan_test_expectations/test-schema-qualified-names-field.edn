@@ -1,0 +1,5 @@
+[:rename
+ {x3 my_field}
+ [:project
+  [{x3 (. x1 :my_field)}]
+  [:rename {column_name x1} [:scan {:table columns} [column_name]]]]]

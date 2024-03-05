@@ -1,0 +1,1 @@
+[:scan {:table columns} [column_name]]
