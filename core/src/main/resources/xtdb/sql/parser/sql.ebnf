@@ -345,14 +345,14 @@ boolean_literal
     | delimited_identifier
     ;
 
-<schema_name>
+schema_name
     : 'INFORMATION_SCHEMA'
     | 'PG_CATALOG'
     | 'PUBLIC'
     ;
 
 <table_name>
-    : [ <schema_name> <period> ] !#'(?i)(\b(SYSTEM_TIME|VALID_TIME)\b)' identifier
+    : [ schema_name <period> ] !#'(?i)(\b(SYSTEM_TIME|VALID_TIME)\b)' identifier
     ;
 
 <column_name>
@@ -618,7 +618,7 @@ identifier_chain
 (*  6.7        <column reference> *)
 
 column_reference
-    : [ <schema_name> <period> ] basic_identifier_chain
+    : [ schema_name <period> ] basic_identifier_chain
     ;
 
 (*  6.9        <set function specification> *)
