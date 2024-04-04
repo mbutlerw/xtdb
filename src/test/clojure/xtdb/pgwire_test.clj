@@ -10,7 +10,8 @@
             [xtdb.pgwire :as pgwire]
             [xtdb.test-util :as tu]
             [xtdb.util :as util]
-            [juxt.clojars-mirrors.nextjdbc.v1v2v674.next.jdbc :as jdbc])
+            [juxt.clojars-mirrors.nextjdbc.v1v2v674.next.jdbc :as jdbc]
+            [juxt.clojars-mirrors.nextjdbc.v1v2v674.next.jdbc.result-set :as result-set])
   (:import (com.fasterxml.jackson.databind JsonNode ObjectMapper)
            (com.fasterxml.jackson.databind.node JsonNodeType)
            (java.lang Thread$State)
@@ -128,6 +129,14 @@
     (is (= false (.next rs)))))
 
 (deftest simple-query-test
+  (with-open [conn (jdbc-conn "preferQueryMode" "simple")
+              stmt (.createStatement conn)
+              rs (.executeQuery stmt "SELECT a.a FROM (VALUES ('hello, world')) a (a)")]
+    (is (= true (.next rs)))
+    (is (= false (.next rs)))))
+
+;;TODO ADD support for multiple statments in a single simple query
+#_(deftest mulitiple-statement-simple-query-test
   (with-open [conn (jdbc-conn "preferQueryMode" "simple")
               stmt (.createStatement conn)
               rs (.executeQuery stmt "SELECT a.a FROM (VALUES ('hello, world')) a (a)")]
@@ -351,7 +360,12 @@
 
 (defn q [conn sql]
   (->> (jdbc/execute! conn sql)
-       (mapv (fn [row] (update-vals row (comp json/read-str str))))))
+           (mapv (fn [row] (update-vals row (comp json/read-str str))))))
+
+(defn q-seq [conn sql]
+  (->> (jdbc/execute! conn sql {:builder-fn result-set/as-arrays})
+       (rest)
+       (mapv (fn [row] (mapv (comp json/read-str str) row)))))
 
 (defn ping [conn]
   (-> (q conn ["select a.ping from (values ('pong')) a (ping)"])
@@ -1262,3 +1276,18 @@
     (q conn ["INSERT INTO foo (xt$id) VALUES (TRIM(LEADING 'abc' FROM ''))"])
     #_ ; FIXME #401 - need to show this as an aborted transaction?
     (is (thrown? PSQLException #"Data error - trim error" (q conn ["COMMIT"])))))
+
+(deftest test-column-order
+  (with-open [conn (jdbc-conn)]
+    (let [sql #(q-seq conn [%])]
+      (q conn ["INSERT INTO foo(xt$id, col0, col1) VALUES (1, 10, 'a'), (2, 20, 'b'), (3, 30, 'c')"])
+
+      (is (= [[20 "b" 2] [10 "a" 1] [30 "c" 3]]
+             (sql "SELECT foo.col0, foo.col1, foo.xt$id FROM foo")))
+
+      #_(is (= [[20 "b" 2] [10 "a" 1] [30 "c" 3]]
+             (sql "SELECT * FROM foo"))))))
+
+
+;;TODO test cmd-sync portal cleanup
+;;
