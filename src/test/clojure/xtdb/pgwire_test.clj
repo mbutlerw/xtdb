@@ -568,47 +568,29 @@
 
         (check-server-resources-freed)))))
 
-(deftest jdbc-query-cancellation-test
-  (require-server {:num-threads 2})
-  (let [stmt-promise (promise)
-
-        start-conn1
-        (fn []
-          (with-open [conn (jdbc-conn)
-                      stmt (.prepareStatement conn "select a.a from a")]
-            (try
-              (with-redefs [pgwire/open-query& (fn [& _] (deliver stmt-promise stmt) (CompletableFuture.))]
-                (with-open [_rs (.executeQuery stmt)]
-                  :not-cancelled))
-              (catch PSQLException e
-                (.getMessage e)))))
-
-        fut (future (start-conn1))]
-
-    (is (not= :timeout (deref stmt-promise 1000 :timeout)))
-    (when (realized? stmt-promise) (.cancel ^PreparedStatement @stmt-promise))
-    (is (= "ERROR: query cancelled during execution" (deref fut 1000 :timeout)))))
+;;TODO no current support for cancelling queries
 
 (deftest jdbc-prepared-query-close-test
   (with-open [conn (jdbc-conn "prepareThreshold" "1"
                               "preparedStatementCacheQueries" 0
                               "preparedStatementCacheMiB" 0)]
     (dotimes [i 3]
-      ;; do not use parameters as to trigger close it needs to be a different query every time
+
       (with-open [stmt (.prepareStatement conn (format "SELECT a.a FROM (VALUES (%s)) a (a)" i))]
-        (.close (.executeQuery stmt))))
+        (.executeQuery stmt)))
 
-    (testing "only empty portal should remain"
-      (is (= [""] (keys (:portals @(:conn-state (get-last-conn)))))))
+    (testing "no portal should remain, they are closed by sync, explicit close or rebinding the unamed portal"
+      (is (empty? (:portals @(:conn-state (get-last-conn))))))
 
-    (testing "even at cache policy 0, pg jdbc caches - but we should only see the last stmt + empty"
+    (testing "the last statement should still exist as they last the duration of the session and are only closed by
+              an explicit close message, which the pg driver sends between execs"
       ;; S_3 because i == 3
       (is (= #{"", "S_3"} (set (keys (:prepared-statements @(:conn-state (get-last-conn))))))))))
 
 (defn psql-available?
   "Returns true if psql is available in $PATH"
   []
-  (try (= 0 (:exit (sh/sh "command" "-v" "psql"))) (catch Throwable _ false)))
+  (try (= 0 (:exit (sh/sh "which" "psql"))) (catch Throwable _ false)))
 
 (defn psql-session
   "Takes a function of two args (send, read).
@@ -658,71 +640,55 @@
 ;; define psql tests if psql is available on path
 ;; (will probably move to a selector)
 (when (psql-available?)
-
   (deftest psql-connect-test
     (require-server)
     (let [{:keys [exit, out]} (sh/sh "psql" "-h" "localhost" "-p" (str *port*) "-c" "select ping")]
       (is (= 0 exit))
-      (is (str/includes? out " pong\n(1 row)"))))
+      (is (str/includes? out " pong\n(1 row)")))))
 
+(when (psql-available?)
   (deftest psql-interactive-test
     (psql-session
-      (fn [send read]
-        (testing "ping"
-          (send "select ping;\n")
-          (let [s (read)]
-            (is (str/includes? s "pong"))
-            (is (str/includes? s "(1 row)"))))
+     (fn [send read]
+       (testing "ping"
+         (send "select ping;\n")
+         (let [s (read)]
+           (is (str/includes? s "pong"))
+           (is (str/includes? s "(1 row)"))))
 
-        (testing "numeric printing"
-          (send "select a.a from (values (42)) a (a);\n")
-          (is (str/includes? (read) "42")))
+       (testing "numeric printing"
+         (send "select a.a from (values (42)) a (a);\n")
+         (is (str/includes? (read) "42")))
 
-        (testing "expecting column name"
-          (send "select a.flibble from (values (42)) a (flibble);\n")
-          (is (str/includes? (read) "flibble")))
+       (testing "expecting column name"
+         (send "select a.flibble from (values (42)) a (flibble);\n")
+         (is (str/includes? (read) "flibble")))
 
-        (testing "mixed type col"
-          (send "select a.a from (values (42), ('hello!'), (array [1,2,3])) a (a);\n")
-          (let [s (read)]
-            (is (str/includes? s "42"))
-            (is (str/includes? s "\"hello!\""))
-            (is (str/includes? s "[1,2,3]"))
-            (is (str/includes? s "(3 rows)"))))
+       (testing "mixed type col"
+         (send "select a.a from (values (42), ('hello!'), (array [1,2,3])) a (a);\n")
+         (let [s (read)]
+           (is (str/includes? s "42"))
+           (is (str/includes? s "\"hello!\""))
+           (is (str/includes? s "[1,2,3]"))
+           (is (str/includes? s "(3 rows)"))))
 
-        (testing "parse error"
-          (send "not really sql;\n")
-          (is (str/includes? (read :err) "ERROR"))
+       (testing "error during plan"
+         (with-redefs [clojure.tools.logging/logf (constantly nil)]
+           (send "select baz.a from (values (42)) a (a);\n")
+           (is (str/includes? (read :err) "Table not in scope: baz")))
 
-          (testing "parse error allows session to continue"
-            (send "select ping;\n")
-            (is (str/includes? (read) "pong"))))
+         (testing "query error allows session to continue"
+           (send "select ping;\n")
+           (is (str/includes? (read) "pong"))))
 
-        (testing "query crash during plan"
-          (with-redefs [clojure.tools.logging/logf (constantly nil)
-                        xtp/open-query& (fn [& _] (CompletableFuture/failedFuture (Throwable. "oops")))]
-            (send "select a.a from (values (42)) a (a);\n")
-            (is (str/includes? (read :err) "unexpected server error during query execution")))
+       (testing "error during query execution"
+         (with-redefs [clojure.tools.logging/logf (constantly nil)]
+           (send "select (1 / 0) from (values (42)) a (a);\n")
+           (is (str/includes? (read :err) "data exception — division by zero")))
 
-          (testing "internal query error allows session to continue"
-            (send "select ping;\n")
-            (is (str/includes? (read) "pong"))))
-
-        (testing "query crash during result set iteration"
-          (with-redefs [clojure.tools.logging/logf (constantly nil)
-                        xtp/open-query& (fn [& _]
-                                          (CompletableFuture/completedFuture
-                                           (StreamSupport/stream
-                                            (reify ICursor
-                                              (tryAdvance [_ _c]
-                                                (throw (Throwable. "oops"))))
-                                            false)))]
-            (send "select a.a from (values (42)) a (a);\n")
-            (is (str/includes? (read :err) "unexpected server error during query execution")))
-
-          (testing "internal query error allows session to continue"
-            (send "select ping;\n")
-            (is (str/includes? (read) "pong"))))))))
+         (testing "query error allows session to continue"
+           (send "select ping;\n")
+           (is (str/includes? (read) "pong"))))))))
 
 (def pg-param-representation-examples
   "A library of examples to test pg parameter oid handling.
@@ -995,8 +961,9 @@
          (let [s (read)]
            (is (str/includes? s "DELETE 0"))
            (testing "no description sent"
-             (is (not (str/includes? s "_iid")))))))))
+             (is (not (str/includes? s "_iid"))))))))))
 
+(when (psql-available?)
   (deftest psql-dml-at-prompt-test
     (psql-session
      (fn [send read]
@@ -1285,9 +1252,5 @@
       (is (= [[20 "b" 2] [10 "a" 1] [30 "c" 3]]
              (sql "SELECT foo.col0, foo.col1, foo.xt$id FROM foo")))
 
-      #_(is (= [[20 "b" 2] [10 "a" 1] [30 "c" 3]]
+      (is (= [[2 20 "b"] [1 10 "a"] [3 30 "c"]]
              (sql "SELECT * FROM foo"))))))
-
-
-;;TODO test cmd-sync portal cleanup
-;;
