@@ -58,7 +58,7 @@
 
 #_{:clj-kondo/ignore [:unused-binding :clojure-lsp/unused-public-var]}
 (definterface IRaQuerySource
-  (^xtdb.query.PreparedQuery prepareRaQuery [ra-query]))
+  (^xtdb.query.PreparedQuery prepareRaQuery [ra-query table-info]))
 
 (defn- wrap-cursor ^xtdb.IResultCursor [^ICursor cursor, ^AutoCloseable wm, ^BufferAllocator al,
                                         ^Clock clock, ^RefCounter ref-ctr fields]
@@ -85,72 +85,101 @@
 
     (columnFields [_] fields)))
 
+(defn- param-sym [v]
+  (-> (symbol (str "?" v))
+      util/symbol->normal-form-symbol
+      (with-meta {:param? true})))
+
+(defn open-args [^BufferAllocator allocator, args]
+  (vw/open-params allocator
+                  (->> args
+                       (into {} (map (fn [[k v]]
+                                       (MapEntry/create (param-sym (str (symbol k))) v)))))))
+
 (defn prepare-ra ^xtdb.query.PreparedQuery
   ;; this one used from zero-dep tests
-  (^xtdb.query.PreparedQuery [query] (prepare-ra query {:ref-ctr (RefCounter.)}))
+  (^xtdb.query.PreparedQuery [query] (prepare-ra query {:ref-ctr (RefCounter.)} {}))
 
-  (^xtdb.query.PreparedQuery [query, {:keys [^IScanEmitter scan-emitter, ^BufferAllocator allocator, ^IMetadataManager metadata-mgr, ^RefCounter ref-ctr]}]
+  (^xtdb.query.PreparedQuery [query, {:keys [^IScanEmitter scan-emitter, ^BufferAllocator allocator, ^IMetadataManager metadata-mgr, ^RefCounter ref-ctr]} table-info]
    (let [conformed-query (s/conform ::lp/logical-plan query)]
      (when (s/invalid? conformed-query)
        (throw (err/illegal-arg :malformed-query
                                {:plan query
                                 :explain (s/explain-data ::lp/logical-plan query)})))
 
-     (let [scan-cols (->> (lp/child-exprs conformed-query)
-                          (into #{} (comp (filter (comp #{:scan} :op))
-                                          (mapcat scan/->scan-cols))))
-           cache (ConcurrentHashMap.)]
+     (let [tables (filter (comp #{:scan} :op) (lp/child-exprs conformed-query))
+           scan-cols (->> tables
+                          (into #{} (mapcat scan/->scan-cols)))
+
+           cache (ConcurrentHashMap.)
+           relevant-table-info-at-prepare-time
+           (->> tables
+                (map #(str (get-in % [:scan-opts :table])))
+                (map #(MapEntry/create % (get table-info %)))
+                (into {}))
+           ordered-outer-projection (:named-projection (meta query))]
        (reify PreparedQuery
-         (bind [_ wm-src {:keys [params basis after-tx default-tz default-all-valid-time?]}]
-           (assert (or scan-emitter (empty? scan-cols)))
+         (bind [_ wm-src {:keys [args basis after-tx default-tz default-all-valid-time?] :as query-opts}]
+           (assert (or scan-emitter (empty? scan-cols))) ;;TODO move this assert to constructor?
+           (util/with-close-on-catch [params (open-args allocator args)]
+             (let [{:keys [at-tx current-time]} basis
+                   current-time (or current-time (.instant expr/*clock*))
+                   default-tz (or default-tz (.getZone expr/*clock*))
+                   wm-tx (or at-tx after-tx)
+                   table-info-at-bind-time (scan/tables-with-cols query-opts wm-src scan-emitter)
+                   _ (when-not (=
+                                relevant-table-info-at-prepare-time
+                                (select-keys table-info-at-bind-time (keys relevant-table-info-at-prepare-time)))
+                       (err/runtime-err :prepared-query-out-of-date
+                                        {:err/message "Relevant table schema has changed since preparing query, please prepare again"}))
+                   clock (Clock/fixed current-time default-tz)
 
-           (let [{:keys [at-tx current-time]} basis
-                 current-time (or current-time (.instant expr/*clock*))
-                 default-tz (or default-tz (.getZone expr/*clock*))
-                 wm-tx (or at-tx after-tx)
-                 clock (Clock/fixed current-time default-tz)
-                 {:keys [fields ->cursor]} (.computeIfAbsent cache
-                                                             {:scan-fields (when (and (seq scan-cols) scan-emitter)
-                                                                             (with-open [wm (.openWatermark wm-src wm-tx)]
-                                                                               (.scanFields scan-emitter wm scan-cols)))
-                                                              :param-fields (expr/->param-fields params)
-                                                              :default-tz default-tz
-                                                              :default-all-valid-time? default-all-valid-time?
-                                                              :last-known-chunk (when metadata-mgr
-                                                                                  (.lastEntry (.chunksMetadata metadata-mgr)))}
-                                                             (reify Function
-                                                               (apply [_ emit-opts]
-                                                                 (binding [expr/*clock* clock]
-                                                                   (lp/emit-expr conformed-query (assoc emit-opts :scan-emitter scan-emitter))))))]
-             (reify
-               BoundQuery
-               (columnFields [_] fields)
+                   {:keys [fields ->cursor]} (.computeIfAbsent cache
+                                                               {:scan-fields (when (and (seq scan-cols) scan-emitter)
+                                                                               (with-open [wm (.openWatermark wm-src wm-tx)]
+                                                                                 (.scanFields scan-emitter wm scan-cols)))
+                                                                :param-fields (expr/->param-fields params)
+                                                                :default-tz default-tz
+                                                                :default-all-valid-time? default-all-valid-time?
+                                                                :last-known-chunk (when metadata-mgr
+                                                                                    (.lastEntry (.chunksMetadata metadata-mgr)))}
+                                                               (reify Function
+                                                                 (apply [_ emit-opts]
+                                                                   (binding [expr/*clock* clock]
+                                                                     (lp/emit-expr conformed-query (assoc emit-opts :scan-emitter scan-emitter))))))]
+               (reify
+                 BoundQuery
+                 (columnFields [_]
+                   (mapv
+                    #(hash-map
+                      (str %)
+                      (get fields %))
+                    ordered-outer-projection))
+                 (openCursor [_]
+                   (.acquire ref-ctr)
+                   (let [^BufferAllocator allocator
+                         (if allocator
+                           (util/->child-allocator allocator "BoundQuery/openCursor")
+                           (RootAllocator.))
+                         wm (some-> wm-src (.openWatermark wm-tx))]
+                     (try
+                       (binding [expr/*clock* clock]
+                         (-> (->cursor {:allocator allocator, :watermark wm
+                                        :clock clock,
+                                        :basis (-> basis
+                                                   (update :at-tx (fnil identity (some-> wm .txBasis)))
+                                                   (assoc :current-time current-time))
+                                        :params params, :default-all-valid-time? default-all-valid-time?})
+                             (wrap-cursor wm allocator clock ref-ctr fields)))
 
-               (openCursor [_]
-                 (.acquire ref-ctr)
-                 (let [^BufferAllocator allocator
-                       (if allocator
-                         (util/->child-allocator allocator "BoundQuery/openCursor")
-                         (RootAllocator.))
-                       wm (some-> wm-src (.openWatermark wm-tx))]
-                   (try
-                     (binding [expr/*clock* clock]
-                       (-> (->cursor {:allocator allocator, :watermark wm
-                                      :clock clock,
-                                      :basis (-> basis
-                                                 (update :at-tx (fnil identity (some-> wm .txBasis)))
-                                                 (assoc :current-time current-time))
-                                      :params params, :default-all-valid-time? default-all-valid-time?})
-                           (wrap-cursor wm allocator clock ref-ctr fields)))
+                       (catch Throwable t
+                         (.release ref-ctr)
+                         (util/try-close wm)
+                         (util/try-close allocator)
+                         (throw t)))))
 
-                     (catch Throwable t
-                       (.release ref-ctr)
-                       (util/try-close wm)
-                       (util/try-close allocator)
-                       (throw t)))))
-
-               AutoCloseable
-               (close [_] (util/try-close params))))))))))
+                 AutoCloseable
+                 (close [_] (util/try-close params)))))))))))
 
 (defmethod ig/prep-key ::ra-query-source [_ opts]
   (merge opts
@@ -164,11 +193,11 @@
         deps (-> deps (assoc :ref-ctr ref-ctr))]
     (reify
       IRaQuerySource
-      (prepareRaQuery [_ query]
+      (prepareRaQuery [_ query table-info]
         (.computeIfAbsent cache query
                           (reify Function
                             (apply [_ _]
-                              (prepare-ra query deps)))))
+                              (prepare-ra query deps table-info)))))
 
       AutoCloseable
       (close [_]
@@ -188,17 +217,6 @@
 
     :else (throw (err/illegal-arg :unknown-query-type {:query query, :type (type query)}))))
 
-(defn- param-sym [v]
-  (-> (symbol (str "?" v))
-      util/symbol->normal-form-symbol
-      (with-meta {:param? true})))
-
-(defn open-args [^BufferAllocator allocator, args]
-  (vw/open-params allocator
-                  (->> args
-                       (into {} (map (fn [[k v]]
-                                       (MapEntry/create (param-sym (str (symbol k))) v)))))))
-
 (defn- cache-key-fn [^IKeyFn key-fn]
   (let [cache (HashMap.)]
     (reify IKeyFn
@@ -208,33 +226,14 @@
                             (apply [_ k]
                               (.denormalize key-fn k))))))))
 
-(defn bind-query [allocator ^IRaQuerySource ra-src, wm-src, plan, query-opts]
-  (let [{:keys [args key-fn]} query-opts
-        key-fn (cache-key-fn key-fn)]
-    (util/with-close-on-catch [args (open-args allocator args)
-                               bound-query (-> (.prepareRaQuery ra-src plan)
-                                               (.bind wm-src (-> query-opts
-                                                                 (assoc :params args, :key-fn key-fn))))
-                               fields (mapv
-                                       #(hash-map
-                                         (str %)
-                                         (get (.columnFields bound-query) %))
-                                       (:named-projection (meta plan)))]
-      {:fields fields
-       :bound-query bound-query})))
-
-(defn open-query ^java.util.stream.Stream [allocator ^IRaQuerySource ra-src, wm-src, plan, query-opts]
-  (let [{:keys [args key-fn]} query-opts
-        key-fn (cache-key-fn key-fn)]
-    (util/with-close-on-catch [args (open-args allocator args)
-                               cursor (-> (.prepareRaQuery ra-src plan)
-                                          (.bind wm-src (-> query-opts
-                                                            (assoc :params args, :key-fn key-fn)))
-                                          (.openCursor))]
-      (-> (StreamSupport/stream cursor false)
+(defn open-cursor-as-stream ^java.util.stream.Stream [^BoundQuery bound-query {:keys [key-fn]}]
+  (let [key-fn (cache-key-fn key-fn)]
+    (util/with-close-on-catch [cursor (.openCursor bound-query)]
+      (->
+       (StreamSupport/stream cursor false)
           ^Stream (.onClose (fn []
                               (util/close cursor)
-                              (util/close args)))
+                              (util/close bound-query)))
           (.flatMap (reify Function
                       (apply [_ rel]
                         (.stream (vr/rel->rows rel key-fn)))))))))

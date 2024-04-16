@@ -23,7 +23,7 @@
            xtdb.api.module.XtdbModule$Factory
            (xtdb.api.query Basis IKeyFn QueryOptions XtqlQuery)
            xtdb.indexer.IIndexer
-           (xtdb.query IRaQuerySource)))
+           (xtdb.query IRaQuerySource PreparedQuery)))
 
 (set! *unchecked-math* :warn-on-boxed)
 
@@ -39,8 +39,8 @@
 
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (definterface IXtdbInternal
-  (^java.util.concurrent.CompletableFuture compileQuery [^java.lang.String query, ^xtdb.api.query.QueryOptions query-opts])
-  (^java.util.concurrent.CompletableFuture bindStatement [^clojure.lang.PersistentVector stmt, ^xtdb.api.query.QueryOptions query-opts]))
+  (^java.util.concurrent.CompletableFuture prepareQuery [^java.lang.String query, query-opts])
+  (^java.util.concurrent.CompletableFuture bindQuery [^xtdb.query.PreparedQuery prepared-query query-opts]))
 
 (defrecord Node [^BufferAllocator allocator
                  ^IIndexer indexer
@@ -62,8 +62,32 @@
                 (swap! !latest-submitted-tx time/max-tx tx-key)
                 tx-key))))))
 
-  (^CompletableFuture openQueryAsync [_ ^String query, ^QueryOptions query-opts]
+  (^CompletableFuture openQueryAsync [this ^String query, ^QueryOptions query-opts]
+   ;;TODO explain?
+   ;;
    (let [query-opts (-> (into {:default-tz default-tz,
+                               :after-tx @!latest-submitted-tx
+                               :key-fn #xt/key-fn :snake-case-string}
+                              query-opts)
+                        (update :basis (fn [b] (cond->> b (instance? Basis b) (into {}))))
+                        (with-after-tx-default))]
+     (-> (.prepareQuery this query query-opts)
+         (util/then-apply
+           (fn [^PreparedQuery prepared-query]
+
+             (clojure.pprint/pprint (class prepared-query))
+             (clojure.pprint/pprint (type query-opts))
+             (let [bound-query (.bind prepared-query wm-src query-opts)]
+               (-> (q/open-cursor-as-stream bound-query query-opts)
+                   (metrics/wrap-query (:query-timer metrics) registry)))
+
+             #_(if (:explain? query-opts)
+                 (Stream/of {(.denormalize ^IKeyFn (:key-fn query-opts) "plan") "TODO" #_plan})
+                 (-> (q/open-cursor-as-stream, allocator ra-src wm-src plan (-> query-opts (assoc :table-info table-info)))
+
+                     (metrics/wrap-query (:query-timer metrics) registry)))))))
+
+   #_(let [query-opts (-> (into {:default-tz default-tz,
                                :after-tx @!latest-submitted-tx
                                :key-fn #xt/key-fn :snake-case-string}
                               query-opts)
@@ -79,11 +103,12 @@
                    plan (sql/compile-query query (-> query-opts (assoc :table-info table-info)))]
                (if (:explain? query-opts)
                  (Stream/of {(.denormalize ^IKeyFn (:key-fn query-opts) "plan") plan})
-                 (-> (q/open-query allocator ra-src wm-src plan query-opts)
+                 (-> (q/open-query allocator ra-src wm-src plan (-> query-opts (assoc :table-info table-info)))
+
                      (metrics/wrap-query (:query-timer metrics) registry)))))))))
 
   (^CompletableFuture openQueryAsync [_ ^XtqlQuery query, ^QueryOptions query-opts]
-   (let [query-opts (-> (into {:default-tz default-tz,
+   #_(let [query-opts (-> (into {:default-tz default-tz,
                                :after-tx @!latest-submitted-tx
                                :key-fn #xt/key-fn :camel-case-string}
                               query-opts)
@@ -109,12 +134,9 @@
      :latest-submitted-tx (xtp/latest-submitted-tx this)})
 
   IXtdbInternal
-  (^CompletableFuture compileQuery [_ ^String query, ^QueryOptions query-opts]
-    (let [query-opts (-> (into {:default-tz default-tz,
-                                :after-tx @!latest-submitted-tx
-                                :key-fn #xt/key-fn :snake-case-string}
+  (^CompletableFuture prepareQuery [_ ^String query, query-opts]
+    (let [query-opts (-> (into {:after-tx @!latest-submitted-tx}
                                query-opts)
-                         (update :basis (fn [b] (cond->> b (instance? Basis b) (into {}))))
                          (with-after-tx-default))]
       (-> (.awaitTxAsync indexer
                          (-> (:after-tx query-opts)
@@ -124,14 +146,12 @@
             (fn [_]
               (let [table-info (scan/tables-with-cols query-opts wm-src scan-emitter)
                     plan (sql/compile-query query (-> query-opts (assoc :table-info table-info)))]
-                plan))))))
+                (.prepareRaQuery ra-src plan table-info)))))))
 
-  (^CompletableFuture bindStatement [_ ^clojure.lang.PersistentVector stmt, ^QueryOptions query-opts]
+  (^CompletableFuture bindQuery [_ ^PreparedQuery prepared-query, query-opts]
     (let [query-opts (-> (into {:default-tz default-tz,
-                                :after-tx @!latest-submitted-tx
-                                :key-fn #xt/key-fn :snake-case-string}
+                                :after-tx @!latest-submitted-tx}
                                query-opts)
-                         (update :basis (fn [b] (cond->> b (instance? Basis b) (into {}))))
                          (with-after-tx-default))]
       (-> (.awaitTxAsync indexer
                          (-> (:after-tx query-opts)
@@ -139,7 +159,7 @@
                          (:tx-timeout query-opts))
           (util/then-apply
             (fn [_]
-              (q/bind-query allocator ra-src wm-src stmt query-opts))))))
+              (.bind prepared-query wm-src query-opts))))))
 
   Closeable
   (close [_]

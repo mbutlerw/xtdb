@@ -1587,7 +1587,7 @@
         (swap! conn-state assoc-in [:prepared-statements stmt-name] stmt)
         (cmd-write-msg conn msg-parse-complete)))))
 
-(defn cmd-bind [{:keys [conn-state ^xtdb.node.impl.IXtdbInternal node] :as conn}
+(defn cmd-bind [{:keys [conn-state node] :as conn}
                 {:keys [portal-name stmt-name params] :as bind-msg}]
   (let [{:keys [statement-type] :as stmt} (get-in @conn-state [:prepared-statements stmt-name])]
     (if stmt
@@ -1605,22 +1605,22 @@
 
                     default-all-valid-time? (not (= :as-of-now (get-in session [:parameters :app-time-defaults])))
 
-                    query-opts (xt/->QueryOptions {:basis (or basis {:current-time (.instant clock)})
-                                                   :after-tx latest-submitted-tx ;;TODO any need for this if we are sending explicit basis?
-                                                   :tx-timeout (Duration/ofSeconds 1)
-                                                   :default-tz (.getZone clock)
-                                                   :args xt-params
-                                                   :default-all-valid-time? default-all-valid-time?
-                                                   :key-fn :snake-case-string})
+                    query-opts {:basis (or basis {:current-time (.instant clock)})
+                                :after-tx latest-submitted-tx ;;TODO any need for this if we are sending explicit basis?
+                                :tx-timeout (Duration/ofSeconds 1)
+                                :default-tz (.getZone clock)
+                                :args xt-params
+                                :default-all-valid-time? default-all-valid-time?
+                                :key-fn :snake-case-string}
 
                     ;;TODO explicit basis means its okay to send the same query-opts twice for now, rather than have to check what tables
                     ;;are reffed by compiled-query and see if they have changed by the time bound-query runs, as these 2 requests are fired in quick
                     ;;succession. Will nee changing when parse is moved to its own phase.
 
-                    {:keys [compiled-query compilation-outcome]}
+                    {:keys [prepared-query prep-outcome]}
                     (try
-                      {:compiled-query @(.compileQuery node (:transformed-query stmt-with-bind-msg) query-opts)
-                       :compilation-outcome :success}
+                      {:prepared-query @(.prepareQuery ^xtdb.node.impl.IXtdbInternal node (:transformed-query stmt-with-bind-msg) query-opts)
+                       :prep-outcome :success}
                       (catch InterruptedException e
                         (log/trace e "Interrupt thrown compiling query")
                         (throw e))
@@ -1631,12 +1631,11 @@
                          (err-pg-exception (.getCause e) "unexpected server error compiling query"))))]
 
 
-                (when (= :success compilation-outcome)
+                (when (= :success prep-outcome)
                   (try
-                    (let [{:keys [fields bound-query]}
-                          @(.bindStatement node compiled-query query-opts)]
+                    (let [bound-query @(.bindQuery ^xtdb.node.impl.IXtdbInternal  node prepared-query query-opts)]
 
-                      {:portal (assoc stmt-with-bind-msg :bound-query bound-query :fields fields)
+                      {:portal (assoc stmt-with-bind-msg :bound-query bound-query :fields (.columnFields bound-query))
                        :bind-outcome :success})
                     (catch InterruptedException e
                       (log/trace e "Interrupt thrown binding prepared statement")

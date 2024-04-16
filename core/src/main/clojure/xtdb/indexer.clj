@@ -170,7 +170,7 @@
 
 (defn- find-fn [allocator ^IRaQuerySource ra-src, wm-src, sci-ctx {:keys [basis default-tz]} fn-iid]
   (let [lp '[:scan {:table xt$tx_fns} [{xt$iid (= xt$iid ?iid)} xt$id xt$fn]]
-        ^xtdb.query.PreparedQuery pq (.prepareRaQuery ra-src lp)]
+        ^xtdb.query.PreparedQuery pq (.prepareRaQuery ra-src lp {})] ;;TODO table-info
     (with-open [bq (.bind pq wm-src
                           {:params (vr/rel-reader [(-> (vw/open-vec allocator '?iid [fn-iid])
                                                        (vr/vec->reader))]
@@ -210,7 +210,8 @@
     ([query] (tx-fn-q* query {}))
 
     ([query opts]
-     (let [query-opts (-> (reduce into [{:key-fn :kebab-case-keyword} tx-opts opts])
+     ;;TODO table-info
+     #_(let [query-opts (-> (reduce into [{:key-fn :kebab-case-keyword} tx-opts opts])
                           (update :key-fn serde/read-key-fn))
            plan (q/compile-query query query-opts nil)]
        (with-open [res (q/open-query allocator ra-src wm-src plan query-opts)]
@@ -362,7 +363,7 @@
                 (.logErase iid))))))))
 
 (defn- query-indexer [^IRaQuerySource ra-src, wm-src, ^RelationIndexer rel-idxer, query, {:keys [basis default-tz default-all-valid-time?]} query-opts]
-  (let [^PreparedQuery pq (.prepareRaQuery ra-src query)]
+  (let [^PreparedQuery pq (.prepareRaQuery ra-src query {})] ;;TODO table-info
     (fn eval-query [^RelationReader args]
       (with-open [res (-> (.bind pq wm-src {:params args, :basis basis, :default-tz default-tz
                                             :default-all-valid-time? default-all-valid-time?})
@@ -435,7 +436,7 @@
 
 (defn- ->assert-idxer ^xtdb.indexer.RelationIndexer [mode ^IRaQuerySource ra-src, wm-src
                                                      query, {:keys [basis default-tz default-all-valid-time?]}]
-  (let [^PreparedQuery pq (.prepareRaQuery ra-src query)
+  (let [^PreparedQuery pq (.prepareRaQuery ra-src query {}) ;;TODO table-info
         ^IntPredicate valid-query-pred (case mode
                                          :assert-exists (reify IntPredicate
                                                           (test [_ i] (pos? i)))
