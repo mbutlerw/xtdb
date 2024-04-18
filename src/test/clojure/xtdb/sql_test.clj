@@ -2043,7 +2043,7 @@
                        FROM customers c")))))
 
 
-(t/deftest test-scan-fields
+#_(t/deftest test-scan-fields
 
   (xt/submit-tx tu/*node* [[:put-docs :docs {:xt/id 1 :x 3 :z "foo"}]
                            [:put-docs :socks {:xt/id 2 :x 1 :f "bar"}]

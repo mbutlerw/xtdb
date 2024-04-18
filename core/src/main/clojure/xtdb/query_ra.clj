@@ -54,11 +54,10 @@
                               vw/empty-params)]
        (let [^PreparedQuery pq (if node
                                  (let [^IRaQuerySource ra-src (util/component node ::q/ra-query-source)]
-                                   (.prepareRaQuery ra-src query {})) ;;TODO table-info
+                                   (.prepareRaQuery ra-src query indexer query-opts))
                                  (q/prepare-ra query))
-             bq (.bind pq indexer
-                       (-> (select-keys query-opts [:basis :after-tx :table-args :default-tz :default-all-valid-time?])
-                           (assoc :params params-rel)))]
+             bq (.bind pq (-> (select-keys query-opts [:basis :after-tx :table-args :default-tz :default-all-valid-time?])
+                              (assoc :params params-rel)))]
          (util/with-open [res (.openCursor bq)]
            (let [rows (-> (<-cursor res (serde/read-key-fn key-fn))
                           (cond->> (not preserve-blocks?) (into [] cat)))]

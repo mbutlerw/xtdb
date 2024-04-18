@@ -39,6 +39,7 @@
            (xtdb.api.query IKeyFn Query)
            xtdb.metadata.IMetadataManager
            xtdb.operator.scan.IScanEmitter
+           xtdb.watermark.IWatermarkSource
            xtdb.util.RefCounter))
 
 #_{:clj-kondo/ignore [:unused-binding :clojure-lsp/unused-public-var]}
@@ -53,12 +54,13 @@
   ;; NOTE we could arguably take the actual params here rather than param-fields
   ;; but if we were to make params a VSR this would then make BoundQuery a closeable resource
   ;; ... or at least raise questions about who then owns the params
-  (^xtdb.query.BoundQuery bind [^xtdb.watermark.IWatermarkSource watermarkSource, queryOpts]
+  (^xtdb.query.BoundQuery bind [queryOpts]
    "queryOpts :: {:params, :table-args, :basis, :default-tz}"))
 
 #_{:clj-kondo/ignore [:unused-binding :clojure-lsp/unused-public-var]}
 (definterface IRaQuerySource
-  (^xtdb.query.PreparedQuery prepareRaQuery [ra-query table-info]))
+  (^xtdb.query.PreparedQuery prepareRaQuery [ra-query wm-src query-opts])
+  (^clojure.lang.PersistentVector planQuery [query wm-src query-opts]))
 
 (defn- wrap-cursor ^xtdb.IResultCursor [^ICursor cursor, ^AutoCloseable wm, ^BufferAllocator al,
                                         ^Clock clock, ^RefCounter ref-ctr fields]
@@ -93,14 +95,18 @@
 (defn open-args [^BufferAllocator allocator, args]
   (vw/open-params allocator
                   (->> args
-                       (into {} (map (fn [[k v]]
-                                       (MapEntry/create (param-sym (str (symbol k))) v)))))))
+                       (into {} (map-indexed (fn [idx v ]
+                                               (if (map-entry? v)
+                                                 (MapEntry/create (param-sym (str (symbol (key v)))) (val v))
+                                                 (MapEntry/create (symbol (str "?_" idx)) v))))))))
 
 (defn prepare-ra ^xtdb.query.PreparedQuery
   ;; this one used from zero-dep tests
   (^xtdb.query.PreparedQuery [query] (prepare-ra query {:ref-ctr (RefCounter.)} {}))
 
-  (^xtdb.query.PreparedQuery [query, {:keys [^IScanEmitter scan-emitter, ^BufferAllocator allocator, ^IMetadataManager metadata-mgr, ^RefCounter ref-ctr]} table-info]
+  (^xtdb.query.PreparedQuery [query, {:keys [^IScanEmitter scan-emitter, ^BufferAllocator allocator, ^IMetadataManager metadata-mgr,
+                                             ^RefCounter ref-ctr ^IWatermarkSource wm-src]}
+                              {:keys [table-info]}]
    (let [conformed-query (s/conform ::lp/logical-plan query)]
      (when (s/invalid? conformed-query)
        (throw (err/illegal-arg :malformed-query
@@ -111,6 +117,8 @@
            scan-cols (->> tables
                           (into #{} (mapcat scan/->scan-cols)))
 
+           _ (assert (or scan-emitter (empty? scan-cols)))
+
            cache (ConcurrentHashMap.)
            relevant-table-info-at-prepare-time
            (->> tables
@@ -118,18 +126,18 @@
                 (map #(MapEntry/create % (get table-info %)))
                 (into {}))
            ordered-outer-projection (:named-projection (meta query))]
+
        (reify PreparedQuery
-         (bind [_ wm-src {:keys [args basis after-tx default-tz default-all-valid-time?] :as query-opts}]
-           (assert (or scan-emitter (empty? scan-cols))) ;;TODO move this assert to constructor?
-           (util/with-close-on-catch [params (open-args allocator args)]
+         (bind [_ {:keys [args params basis after-tx default-tz default-all-valid-time?] :as query-opts}]
+
+           (util/with-close-on-catch [params (or params (open-args allocator args))] ;;TODO probably bad to try to close outer params
              (let [{:keys [at-tx current-time]} basis
                    current-time (or current-time (.instant expr/*clock*))
                    default-tz (or default-tz (.getZone expr/*clock*))
                    wm-tx (or at-tx after-tx)
                    table-info-at-bind-time (scan/tables-with-cols query-opts wm-src scan-emitter)
-                   _ (when-not (=
-                                relevant-table-info-at-prepare-time
-                                (select-keys table-info-at-bind-time (keys relevant-table-info-at-prepare-time)))
+                   _ (when-not (= relevant-table-info-at-prepare-time
+                                  (select-keys table-info-at-bind-time (keys relevant-table-info-at-prepare-time)))
                        (err/runtime-err :prepared-query-out-of-date
                                         {:err/message "Relevant table schema has changed since preparing query, please prepare again"}))
                    clock (Clock/fixed current-time default-tz)
@@ -193,11 +201,23 @@
         deps (-> deps (assoc :ref-ctr ref-ctr))]
     (reify
       IRaQuerySource
-      (prepareRaQuery [_ query table-info]
+      (prepareRaQuery [_ query wm-src query-opts]
         (.computeIfAbsent cache query
                           (reify Function
                             (apply [_ _]
-                              (prepare-ra query deps table-info)))))
+                              (prepare-ra query (assoc deps :wm-src wm-src) query-opts)))))
+
+      (planQuery [_ query wm-src query-opts]
+        (let [table-info (scan/tables-with-cols query-opts wm-src (:scan-emitter deps))
+              query-opts (assoc query-opts :table-info table-info)]
+          (cond
+            (string? query) (sql/compile-query query query-opts)
+
+            (seq? query) (xtql/compile-query (xtql.edn/parse-query query) query-opts)
+
+            (instance? Query query) (xtql/compile-query query query-opts)
+
+            :else (throw (err/illegal-arg :unknown-query-type {:query query, :type (type query)})))))
 
       AutoCloseable
       (close [_]

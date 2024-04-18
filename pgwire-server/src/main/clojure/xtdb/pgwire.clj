@@ -29,8 +29,9 @@
            [java.util.concurrent ExecutorService Executors TimeUnit]
            [java.util.function Consumer]
            [org.apache.arrow.vector PeriodDuration]
-           xtdb.query.BoundQuery
+           (xtdb.query BoundQuery PreparedQuery)
            [xtdb.api PgwireServer$Factory Xtdb$Config]
+           xtdb.node.impl.IXtdbInternal
            xtdb.api.module.XtdbModule
            xtdb.IResultCursor
            [xtdb.types IntervalDayTime IntervalMonthDayNano IntervalYearMonth]
@@ -1619,7 +1620,7 @@
 
                     {:keys [prepared-query prep-outcome]}
                     (try
-                      {:prepared-query @(.prepareQuery ^xtdb.node.impl.IXtdbInternal node (:transformed-query stmt-with-bind-msg) query-opts)
+                      {:prepared-query @(.prepareQuery ^IXtdbInternal node ^String (:transformed-query stmt-with-bind-msg) query-opts)
                        :prep-outcome :success}
                       (catch InterruptedException e
                         (log/trace e "Interrupt thrown compiling query")
@@ -1633,7 +1634,7 @@
 
                 (when (= :success prep-outcome)
                   (try
-                    (let [bound-query @(.bindQuery ^xtdb.node.impl.IXtdbInternal  node prepared-query query-opts)]
+                    (let [^BoundQuery bound-query (.bind ^PreparedQuery prepared-query query-opts)]
 
                       {:portal (assoc stmt-with-bind-msg :bound-query bound-query :fields (.columnFields bound-query))
                        :bind-outcome :success})
