@@ -168,11 +168,13 @@
 
         nil))))
 
-(defn- find-fn [^IRaQuerySource ra-src, wm-src, sci-ctx {:keys [basis default-tz] :as query-opts} fn-iid]
+(defn- find-fn [allocator ^IRaQuerySource ra-src, wm-src, sci-ctx {:keys [basis default-tz] :as query-opts} fn-iid]
   (let [lp '[:scan {:table xt$tx_fns} [{xt$iid (= xt$iid ?iid)} xt$id xt$fn]]
-        ^xtdb.query.PreparedQuery pq (.prepareRaQuery ra-src lp wm-src query-opts)] ;;TODO table-info
+        ^xtdb.query.PreparedQuery pq (.prepareRaQuery ra-src lp wm-src query-opts)]
     (with-open [bq (.bind pq
-                          {:args {:iid fn-iid}
+                          {:params (vr/rel-reader [(-> (vw/open-vec allocator '?iid [fn-iid])
+                                                       (vr/vec->reader))]
+                                                  1)
                            :default-all-valid-time? false
                            :basis basis
                            :default-tz default-tz})
@@ -242,7 +244,7 @@
           (let [fn-iid (if fn-iid-rdr
                          (.getBytes fn-iid-rdr tx-op-idx)
                          (trie/->iid (.getObject fn-id-rdr tx-op-idx)))
-                {:keys [fn-id tx-fn]} (find-fn ra-src wm-src (sci/fork sci-ctx) tx-opts fn-iid)
+                {:keys [fn-id tx-fn]} (find-fn allocator ra-src wm-src (sci/fork sci-ctx) tx-opts fn-iid)
                 args (.form ^ClojureForm (.getObject args-rdr tx-op-idx))
 
                 res (try
