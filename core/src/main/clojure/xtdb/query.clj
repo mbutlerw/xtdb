@@ -121,10 +121,11 @@
 
            cache (ConcurrentHashMap.)
            relevant-table-info-at-prepare-time
-           (->> tables
-                (map #(str (get-in % [:scan-opts :table])))
-                (map #(MapEntry/create % (get table-info %)))
-                (into {}))
+           (when table-info
+             (->> tables
+                  (map #(str (get-in % [:scan-opts :table])))
+                  (map #(MapEntry/create % (get table-info %)))
+                  (into {})))
            ordered-outer-projection (:named-projection (meta query))]
 
        (reify PreparedQuery
@@ -135,7 +136,8 @@
                    current-time (or current-time (.instant expr/*clock*))
                    default-tz (or default-tz (.getZone expr/*clock*))
                    wm-tx (or at-tx after-tx)
-                   table-info-at-bind-time (scan/tables-with-cols query-opts wm-src scan-emitter)
+                   table-info-at-bind-time (when relevant-table-info-at-prepare-time
+                                             (scan/tables-with-cols query-opts wm-src scan-emitter))
                    _ (when-not (= relevant-table-info-at-prepare-time
                                   (select-keys table-info-at-bind-time (keys relevant-table-info-at-prepare-time)))
                        (err/runtime-err :prepared-query-out-of-date
@@ -158,11 +160,13 @@
                (reify
                  BoundQuery
                  (columnFields [_]
-                   (mapv
-                    #(hash-map
-                      (str %)
-                      (get fields %))
-                    ordered-outer-projection))
+                   (if ordered-outer-projection
+                     (mapv
+                      #(hash-map
+                        (str %)
+                        (get fields %))
+                      ordered-outer-projection)
+                     fields))
                  (openCursor [_]
                    (.acquire ref-ctr)
                    (let [^BufferAllocator allocator
@@ -249,8 +253,7 @@
 (defn open-cursor-as-stream ^java.util.stream.Stream [^BoundQuery bound-query {:keys [key-fn]}]
   (let [key-fn (cache-key-fn key-fn)]
     (util/with-close-on-catch [cursor (.openCursor bound-query)]
-      (->
-       (StreamSupport/stream cursor false)
+      (-> (StreamSupport/stream cursor false)
           ^Stream (.onClose (fn []
                               (util/close cursor)
                               (util/close bound-query)))
