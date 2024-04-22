@@ -2041,13 +2041,3 @@
                                         WHERE o.customer_id = c.xt$id)
                                 AS orders
                        FROM customers c")))))
-
-
-#_(t/deftest test-scan-fields
-
-  (xt/submit-tx tu/*node* [[:put-docs :docs {:xt/id 1 :x 3 :z "foo"}]
-                           [:put-docs :socks {:xt/id 2 :x 1 :f "bar"}]
-                           [:put-docs :rocks {:xt/id 2 :y 10.1}]])
-
-  (t/is (= [{:x 3}]
-           (xt/q tu/*node* "SELECT * FROM docs, socks"))))

@@ -168,9 +168,9 @@
 
         nil))))
 
-(defn- find-fn [allocator ^IRaQuerySource ra-src, wm-src, sci-ctx {:keys [basis default-tz] :as query-opts} fn-iid]
+(defn- find-fn [allocator ^IRaQuerySource ra-src, wm-src, sci-ctx {:keys [basis default-tz]} fn-iid]
   (let [lp '[:scan {:table xt$tx_fns} [{xt$iid (= xt$iid ?iid)} xt$id xt$fn]]
-        ^xtdb.query.PreparedQuery pq (.prepareRaQuery ra-src lp wm-src query-opts)]
+        ^xtdb.query.PreparedQuery pq (.prepareRaQuery ra-src lp wm-src)]
     (with-open [bq (.bind pq
                           {:params (vr/rel-reader [(-> (vw/open-vec allocator '?iid [fn-iid])
                                                        (vr/vec->reader))]
@@ -209,7 +209,7 @@
     ([query opts]
      (let [query-opts (-> (reduce into [{:key-fn :kebab-case-keyword} tx-opts opts])
                           (update :key-fn serde/read-key-fn))
-           prepared-query (.prepareRaQuery ra-src (.planQuery ra-src query wm-src query-opts) wm-src query-opts)]
+           prepared-query (.prepareRaQuery ra-src (.planQuery ra-src query wm-src query-opts) wm-src)]
 
        (with-open [res (-> (.bind prepared-query query-opts)
                            (q/open-cursor-as-stream query-opts))]
@@ -361,7 +361,7 @@
                 (.logErase iid))))))))
 
 (defn- query-indexer [^IRaQuerySource ra-src, wm-src, ^RelationIndexer rel-idxer, query, {:keys [basis default-tz default-all-valid-time?]} query-opts]
-  (let [^PreparedQuery pq (.prepareRaQuery ra-src query wm-src query-opts)] ;;TODO table-info
+  (let [^PreparedQuery pq (.prepareRaQuery ra-src query wm-src)]
     (fn eval-query [^RelationReader args]
       (with-open [res (-> (.bind pq {:params args, :basis basis, :default-tz default-tz
                                      :default-all-valid-time? default-all-valid-time?})
@@ -433,8 +433,8 @@
         nil))))
 
 (defn- ->assert-idxer ^xtdb.indexer.RelationIndexer [mode ^IRaQuerySource ra-src, wm-src
-                                                     query, {:keys [basis default-tz default-all-valid-time?] :as query-opts}]
-  (let [^PreparedQuery pq (.prepareRaQuery ra-src query wm-src query-opts)
+                                                     query, {:keys [basis default-tz default-all-valid-time?]}]
+  (let [^PreparedQuery pq (.prepareRaQuery ra-src query wm-src)
         ^IntPredicate valid-query-pred (case mode
                                          :assert-exists (reify IntPredicate
                                                           (test [_ i] (pos? i)))

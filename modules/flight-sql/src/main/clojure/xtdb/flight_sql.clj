@@ -160,9 +160,7 @@
                                                                                  (vr/rel-reader 1))]
                                          (doto ps
                                            (some-> (.put :bound-query
-                                                         (.bind prepd-query wm-src
-                                                                {:node node, :params new-params,
-                                                                 :basis {:at-tx (.latestCompletedTx idxer)}}))
+                                                         (.bind prepd-query {:params new-params, :basis {:at-tx (.latestCompletedTx idxer)}}))
                                                    util/try-close))))))
                 (throw (UnsupportedOperationException. "invalid ps-id"))))
 
@@ -182,11 +180,9 @@
       (getFlightInfoStatement [_ cmd _ctx descriptor]
         (let [sql (.toStringUtf8 (.getQueryBytes cmd))
               ticket-handle (new-id)
-              ^BoundQuery bq (-> (.prepareRaQuery ra-src (sql/compile-query sql {}))
+              ^BoundQuery bq (-> (.prepareRaQuery ra-src (sql/compile-query sql) wm-src)
                                  ;; HACK need to get the basis from somewhere...
-                                 (.bind wm-src
-                                        {:node node
-                                         :basis {:at-tx (.latestCompletedTx idxer)}}))
+                                 (.bind {:basis {:at-tx (.latestCompletedTx idxer)}}))
               ticket (Ticket. (-> (doto (FlightSql$TicketStatementQuery/newBuilder)
                                     (.setStatementHandle ticket-handle))
                                   (.build)
@@ -216,7 +212,7 @@
                                   (.toByteArray)))
 
               ^BoundQuery bound-query (or bound-query
-                                          (.bind prepd-query wm-src {:node node}))]
+                                          (.bind prepd-query {}))]
           (.put ps :bound-query bound-query)
           (FlightInfo. (fields->schema (.columnFields bound-query)) descriptor
                        [(FlightEndpoint. ticket (make-array Location 0))]
@@ -235,7 +231,7 @@
               ps (cond-> {:id ps-id, :sql sql
                           :fsql-tx-id (when (.hasTransactionId req)
                                         (.getTransactionId req))}
-                   (not (dml? plan)) (assoc :prepd-query (.prepareRaQuery ra-src plan)))]
+                   (not (dml? plan)) (assoc :prepd-query (.prepareRaQuery ra-src plan wm-src)))]
           (.put stmts ps-id (HashMap. ^Map ps))
 
           (.onNext listener

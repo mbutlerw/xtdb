@@ -59,7 +59,7 @@
 
 #_{:clj-kondo/ignore [:unused-binding :clojure-lsp/unused-public-var]}
 (definterface IRaQuerySource
-  (^xtdb.query.PreparedQuery prepareRaQuery [ra-query wm-src query-opts])
+  (^xtdb.query.PreparedQuery prepareRaQuery [ra-query wm-src])
   (^clojure.lang.PersistentVector planQuery [query wm-src query-opts]))
 
 (defn- wrap-cursor ^xtdb.IResultCursor [^ICursor cursor, ^AutoCloseable wm, ^BufferAllocator al,
@@ -102,46 +102,34 @@
 
 (defn prepare-ra ^xtdb.query.PreparedQuery
   ;; this one used from zero-dep tests
-  (^xtdb.query.PreparedQuery [query] (prepare-ra query {:ref-ctr (RefCounter.)} {}))
+  (^xtdb.query.PreparedQuery [query] (prepare-ra query {:ref-ctr (RefCounter.)}))
 
   (^xtdb.query.PreparedQuery [query, {:keys [^IScanEmitter scan-emitter, ^BufferAllocator allocator, ^IMetadataManager metadata-mgr,
-                                             ^RefCounter ref-ctr ^IWatermarkSource wm-src]}
-                              {:keys [table-info]}]
+                                             ^RefCounter ref-ctr ^IWatermarkSource wm-src]}]
    (let [conformed-query (s/conform ::lp/logical-plan query)]
      (when (s/invalid? conformed-query)
        (throw (err/illegal-arg :malformed-query
                                {:plan query
                                 :explain (s/explain-data ::lp/logical-plan query)})))
 
-     (let [tables (filter (comp #{:scan} :op) (lp/child-exprs conformed-query))
-           scan-cols (->> tables
-                          (into #{} (mapcat scan/->scan-cols)))
+     (let [scan-cols (->> (lp/child-exprs conformed-query)
+                          (into #{} (comp (filter (comp #{:scan} :op))
+                                          (mapcat scan/->scan-cols))))
 
            _ (assert (or scan-emitter (empty? scan-cols)))
 
            cache (ConcurrentHashMap.)
-           relevant-table-info-at-prepare-time
-           (when table-info
-             (->> tables
-                  (map #(str (get-in % [:scan-opts :table])))
-                  (map #(MapEntry/create % (get table-info %)))
-                  (into {})))
+
            ordered-outer-projection (:named-projection (meta query))]
 
        (reify PreparedQuery
-         (bind [_ {:keys [args params basis after-tx default-tz default-all-valid-time?] :as query-opts}]
+         (bind [_ {:keys [args params basis after-tx default-tz default-all-valid-time?]}]
 
            (util/with-close-on-catch [params (or params (open-args allocator args))] ;;TODO probably bad to try to close outer params
              (let [{:keys [at-tx current-time]} basis
                    current-time (or current-time (.instant expr/*clock*))
                    default-tz (or default-tz (.getZone expr/*clock*))
                    wm-tx (or at-tx after-tx)
-                   table-info-at-bind-time (when relevant-table-info-at-prepare-time
-                                             (scan/tables-with-cols query-opts wm-src scan-emitter))
-                   _ (when-not (= relevant-table-info-at-prepare-time
-                                  (select-keys table-info-at-bind-time (keys relevant-table-info-at-prepare-time)))
-                       (err/runtime-err :prepared-query-out-of-date
-                                        {:err/message "Relevant table schema has changed since preparing query, please prepare again"}))
                    clock (Clock/fixed current-time default-tz)
 
                    {:keys [fields ->cursor]} (.computeIfAbsent cache
@@ -205,23 +193,37 @@
         deps (-> deps (assoc :ref-ctr ref-ctr))]
     (reify
       IRaQuerySource
-      (prepareRaQuery [_ query wm-src query-opts]
-        (.computeIfAbsent cache query
-                          (reify Function
-                            (apply [_ _]
-                              (prepare-ra query (assoc deps :wm-src wm-src) query-opts)))))
+      (prepareRaQuery [_ query wm-src]
+        (prepare-ra query (assoc deps :wm-src wm-src)))
 
       (planQuery [_ query wm-src query-opts]
         (let [table-info (scan/tables-with-cols query-opts wm-src (:scan-emitter deps))
-              query-opts (assoc query-opts :table-info table-info)]
-          (cond
-            (string? query) (sql/compile-query query query-opts)
+              plan-query-opts
+              (-> query-opts
+                  (select-keys
+                   [:default-all-valid-time? :decorrelate? :explain?
+                    :instrument-rules? :project-anonymous-columns? :validate-plan?])
+                  (update :decorrelate? #(if (nil? %) true false))
+                  (assoc :table-info table-info))
+              ;;TODO defaults to true in rewrite plan so needs defaulting pre-cache,
+              ;;Move all defaulting to this level if/when everyone goes via planQuery
+              cache-key (assoc plan-query-opts :query query)]
+          (.computeIfAbsent
+           cache
+           cache-key
+           (reify Function
+             (apply [_ _]
+               (let [plan (cond
+                            (string? query) (sql/compile-query query plan-query-opts)
 
-            (seq? query) (xtql/compile-query (xtql.edn/parse-query query) query-opts)
+                            (seq? query) (xtql/compile-query (xtql.edn/parse-query query) plan-query-opts)
 
-            (instance? Query query) (xtql/compile-query query query-opts)
+                            (instance? Query query) (xtql/compile-query query plan-query-opts)
 
-            :else (throw (err/illegal-arg :unknown-query-type {:query query, :type (type query)})))))
+                            :else (throw (err/illegal-arg :unknown-query-type {:query query, :type (type query)})))]
+                 (if (:explain? query-opts)
+                   [:table [{:plan (str plan)}]]
+                   plan)))))))
 
       AutoCloseable
       (close [_]
@@ -230,16 +232,6 @@
 
 (defmethod ig/halt-key! ::ra-query-source [_ ^AutoCloseable ra-query-source]
   (.close ra-query-source))
-
-(defn compile-query [query query-opts table-info]
-  (cond
-    (string? query) (sql/compile-query query (-> query-opts (assoc :table-info table-info)))
-
-    (seq? query) (xtql/compile-query (xtql.edn/parse-query query) table-info)
-
-    (instance? Query query) (xtql/compile-query query table-info)
-
-    :else (throw (err/illegal-arg :unknown-query-type {:query query, :type (type query)}))))
 
 (defn- cache-key-fn [^IKeyFn key-fn]
   (let [cache (HashMap.)]
