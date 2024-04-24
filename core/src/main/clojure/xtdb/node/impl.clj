@@ -15,7 +15,8 @@
   (:import (io.micrometer.core.instrument Timer)
            (java.io Closeable Writer)
            java.util.HashMap
-           (java.util.concurrent CompletableFuture)
+           (java.util.concurrent CompletableFuture ConcurrentHashMap)
+           (java.util.function Function)
            [java.util.stream Stream]
            (org.apache.arrow.memory BufferAllocator RootAllocator)
            (xtdb.api IXtdb TransactionKey Xtdb$Config)
@@ -67,7 +68,8 @@
                  default-tz
                  !latest-submitted-tx
                  system, close-fn, registry
-                 metrics]
+                 metrics
+                 ^ConcurrentHashMap prepared-query-cache]
   IXtdb
   (submitTxAsync [this opts tx-ops]
     (let [system-time (some-> opts .getSystemTime)]
@@ -81,13 +83,33 @@
                 tx-key))))))
 
   (^CompletableFuture openQueryAsync [this ^String query, ^QueryOptions query-opts]
-   (let [query-opts (mapify-query-opts-with-defaults query-opts default-tz @!latest-submitted-tx #xt/key-fn :snake-case-string)]
-     (-> (.prepareQuery this query query-opts)
+   (let [{:keys [after-tx tx-timeout] :as query-opts}
+         (mapify-query-opts-with-defaults query-opts default-tz @!latest-submitted-tx #xt/key-fn :snake-case-string)]
+     (-> (.awaitTxAsync indexer after-tx tx-timeout)
+         (util/then-apply
+           (fn [_]
+             (let [plan (.planQuery q-src query wm-src query-opts)]
+               (.computeIfAbsent
+                prepared-query-cache
+                plan
+                (reify Function
+                  (apply [_ _]
+                    (.prepareRaQuery q-src plan wm-src)))))))
          (then-execute-prepared-query metrics registry query-opts))))
 
   (^CompletableFuture openQueryAsync [this ^XtqlQuery query, ^QueryOptions query-opts]
-   (let [query-opts (mapify-query-opts-with-defaults query-opts default-tz @!latest-submitted-tx #xt/key-fn :camel-case-string)]
-     (-> (.prepareQuery this query query-opts)
+   (let [{:keys [after-tx tx-timeout] :as query-opts}
+         (mapify-query-opts-with-defaults query-opts default-tz @!latest-submitted-tx #xt/key-fn :camel-case-string)]
+     (-> (.awaitTxAsync indexer after-tx tx-timeout)
+         (util/then-apply
+           (fn [_]
+             (let [plan (.planQuery q-src query wm-src query-opts)]
+               (.computeIfAbsent
+                prepared-query-cache
+                plan
+                (reify Function
+                  (apply [_ _]
+                    (.prepareRaQuery q-src plan wm-src)))))))
          (then-execute-prepared-query metrics registry query-opts))))
 
   xtp/PStatus
@@ -148,7 +170,8 @@
   (let [node (map->Node (-> deps
                             (assoc :!latest-submitted-tx (atom nil))
                             (assoc :metrics {:query-timer (metrics/add-timer registry "query.timer"
-                                                                             {:description "indicates the timings for queries"})})))]
+                                                                             {:description "indicates the timings for queries"})})
+                            (assoc :prepared-query-cache (ConcurrentHashMap.))))]
     ;; TODO seems to create heap memory pressure, disabled for now
     #_(metrics/add-gauge registry "node.tx.lag.seconds"
                          (gauge-lag-secs-fn node))
