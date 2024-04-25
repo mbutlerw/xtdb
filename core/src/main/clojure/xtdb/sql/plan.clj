@@ -1,5 +1,6 @@
 (ns xtdb.sql.plan
-  (:require [clojure.string :as str]
+  (:require [clojure.set :as set]
+            [clojure.string :as str]
             [clojure.tools.logging :as log]
             [xtdb.error :as err]
             [xtdb.logical-plan :as lp]
@@ -155,7 +156,8 @@
 
 (defrecord JoinTable [env l r
                       ^SqlParser$JoinTypeContext join-type-ctx
-                      ^SqlParser$JoinSpecificationContext join-spec-ctx]
+                      ^SqlParser$JoinSpecificationContext join-spec-ctx
+                      common-cols]
   Scope
   (available-cols [_ chain]
     (->> [l r]
@@ -163,7 +165,9 @@
                         (distinct)))))
 
   (find-decls [_ chain]
-    (->> [l r]
+    (->> (if (and (= 1 (count chain))
+                  (get common-cols (first chain)))
+           [l] [l r])
          (mapcat #(find-decls % chain))))
 
   TableRef
@@ -181,18 +185,40 @@
                             [:left-outer-join r l]
                             [join-type l r])
 
-          join-cond (or (some-> join-spec-ctx
-                                (.accept
-                                 (reify SqlVisitor
-                                   (visitJoinCondition [_ ctx]
-                                     (let [expr-visitor (->ExprPlanVisitor env this-scope)]
-                                       [(-> (.expr ctx)
-                                            (.accept expr-visitor))])))))
+          join-cond (or (if common-cols
+                          (vec (for [col-name common-cols]
+                                 {(find-decl l [col-name])
+                                  (find-decl r [col-name])}))
+
+                          (some-> join-spec-ctx
+                                  (.accept
+                                   (reify SqlVisitor
+                                     (visitJoinCondition [_ ctx]
+                                       (let [expr-visitor (->ExprPlanVisitor env this-scope)]
+                                         [(-> (.expr ctx)
+                                              (.accept expr-visitor))]))))))
                         [])
           planned-l (plan-table-ref l)
           planned-r (plan-table-ref r)]
 
       [join-type join-cond planned-l planned-r])))
+
+(defrecord CrossJoinTable [env l r]
+  Scope
+  (available-cols [_ chain]
+    (->> [l r]
+         (into [] (comp (mapcat #(available-cols % chain))
+                        (distinct)))))
+
+  (find-decls [_ chain]
+    (->> [l r]
+         (mapcat #(find-decls % chain))))
+
+  TableRef
+  (plan-table-ref [_]
+    (let [planned-l (plan-table-ref l)
+          planned-r (plan-table-ref r)]
+      [:mega-join [] [planned-l planned-r]])))
 
 (defrecord DerivedTable [plan table-alias unique-table-alias available-cols col-syms]
   Scope
@@ -256,8 +282,28 @@
 
   (visitJoinTable [this ctx]
     (let [l (-> (.tableReference ctx 0) (.accept this))
-          r (-> (.tableReference ctx 1) (.accept this))]
-      (->JoinTable env l r (.joinType ctx) (.joinSpecification ctx))))
+          r (-> (.tableReference ctx 1) (.accept this))
+          common-cols (.accept (.joinSpecification ctx)
+                            (reify SqlVisitor
+                              (visitJoinCondition [_ _] nil)
+                              (visitNamedColumnsJoin [_ ctx]
+                                (->> (.columnNameList ctx) (.columnName)
+                                     (into #{} (map (comp ->col-sym identifier-sym)))))))]
+
+      (->JoinTable env l r (.joinType ctx) (.joinSpecification ctx)
+                   common-cols)))
+
+  (visitCrossJoinTable [this ctx]
+    (->CrossJoinTable env
+                      (-> (.tableReference ctx 0) (.accept this))
+                      (-> (.tableReference ctx 1) (.accept this))))
+
+  (visitNaturalJoinTable [this ctx]
+    (let [l (-> (.tableReference ctx 0) (.accept this))
+          r (-> (.tableReference ctx 1) (.accept this))
+          common-cols (set/intersection (set (available-cols l nil)) (set (available-cols r nil)))]
+
+      (->JoinTable env l r (.joinType ctx) nil common-cols)))
 
   (visitDerivedTable [{{:keys [!id-count]} :env} ctx]
     (let [{:keys [plan col-syms]} (-> (.subquery ctx) (.queryExpression)
@@ -696,6 +742,6 @@
              (vary-meta assoc :param-count @!param-count)))))))
 
 (comment
-  (plan-statement "SELECT * FROM foo WHERE bar + baz = 3"
-                  {:table-info {"foo" #{"bar" "baz" "xt$id"}
+  (plan-statement "SELECT * FROM foo JOIN bar USING (baz)"
+                  {:table-info {"foo" #{"bar" "baz"}
                                 "bar" #{"baz" "quux"}}}))
