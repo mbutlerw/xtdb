@@ -193,7 +193,12 @@
     (reify
       IQuerySource
       (prepareRaQuery [_ query wm-src]
-        (prepare-ra query (assoc deps :wm-src wm-src)))
+        (.computeIfAbsent
+         cache
+         query
+         (reify Function
+           (apply [_ _]
+             (prepare-ra query (assoc deps :wm-src wm-src))))))
 
       (planQuery [_ query wm-src query-opts]
         (let [table-info (scan/tables-with-cols query-opts wm-src (:scan-emitter deps))
