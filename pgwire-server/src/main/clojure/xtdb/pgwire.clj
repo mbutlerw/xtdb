@@ -25,7 +25,7 @@
            [java.nio ByteBuffer]
            [java.nio.charset StandardCharsets]
            [java.time Clock Duration LocalDate LocalDateTime OffsetDateTime Period ZoneId ZoneOffset ZonedDateTime]
-           [java.util HashMap List Map]
+           [java.util HashMap List Map UUID]
            [java.util.concurrent ExecutorService Executors TimeUnit]
            [java.util.function Consumer]
            [org.apache.arrow.vector PeriodDuration]
@@ -35,7 +35,7 @@
            xtdb.api.module.XtdbModule
            xtdb.IResultCursor
            [xtdb.types IntervalDayTime IntervalMonthDayNano IntervalYearMonth]
-           [xtdb.vector RelationReader]))
+           [xtdb.vector RelationReader IVectorReader]))
 
 ;; references
 ;; https://www.postgresql.org/docs/current/protocol-flow.html
@@ -313,19 +313,78 @@
 (defn- read-utf8 [^bytes barr] (String. barr StandardCharsets/UTF_8))
 (defn- read-ascii [^bytes barr] (String. barr StandardCharsets/US_ASCII))
 
+(def pg-types
+  {:undefined {:typname "undefined"
+               :oid 0
+               :read-text (fn [ba] (some-> ba read-utf8))}
+   :int8 {:typname "int8"
+          :oid 20
+          :read-binary (fn [ba] (-> ba ByteBuffer/wrap .getLong))
+          :read-text (fn [ba] (-> ba read-utf8 Long/parseLong))
+          :write-binary (fn [^IVectorReader rdr idx]
+                          (when-not (.isNull rdr idx)
+                            (let [bb (doto (ByteBuffer/allocate 8)
+                                       (.putLong (.getLong rdr idx)))]
+                              (.array bb))))
+          :write-text (fn [^IVectorReader rdr idx]
+                        (when-not (.isNull rdr idx)
+                          (utf8 (.getLong rdr idx))))}
+   :float8 {:typename "float8"
+            :oid 701
+            :read-binary (fn [ba] (-> ba ByteBuffer/wrap .getDouble))
+            :read-text (fn [ba] (-> ba read-utf8 Double/parseDouble))
+            :write-binary (fn [^IVectorReader rdr idx]
+                            (when-not (.isNull rdr idx)
+                              (let [bb (doto (ByteBuffer/allocate 8)
+                                         (.putDouble (.getDouble rdr idx)))]
+                                (.array bb))))
+            :write-text (fn [^IVectorReader rdr idx]
+                          (when-not (.isNull rdr idx)
+                            (utf8 (.getDouble rdr idx))))}
+   :uuid {:typname "uuid"
+          :oid 2950
+          :read-binary (fn [ba] (util/byte-buffer->uuid (ByteBuffer/wrap ba)))
+          :read-text (fn [ba] (UUID/fromString (read-utf8 ba)))
+          :write-binary (fn [^IVectorReader rdr idx]
+                          (let [ba ^bytes (byte-array 16)]
+                            (.get (.getBytes rdr idx) ba)
+                            ba))
+          :write-text (fn [^IVectorReader rdr idx]
+                        (utf8 (util/byte-buffer->uuid (.getBytes rdr idx))))}
+   :varchar {:typname "varchar"
+             :oid 1043
+             :read-text read-utf8
+             :write-text (fn [^IVectorReader rdr idx]
+                           (when-not (.isNull rdr idx)
+                             (let [bb (.getBytes rdr idx)
+                                   ba ^bytes (byte-array (.remaining bb))]
+                               (.get bb ba)
+                               ba)))}
+   :boolean {:typname "boolean"
+             :oid 16
+             :read-text (fn [ba] (Boolean/parseBoolean (read-utf8 ba)))
+             :write-text (fn [^IVectorReader rdr idx]
+                           (when-not (.isNull rdr idx)
+                             (utf8 (if (.getBoolean rdr idx) "t" "f"))))}
+   ;; json-write-text is essentially the default in send-query-result so no need to specify here
+   :json {:typname "json"
+          :oid 114}})
+
+(def pg-types-by-oid (into {} (map #(hash-map (:oid (val %)) (val %))) pg-types))
+
+(defn col-type->pg-type [col-type]
+  (get
+   {:utf8 :varchar
+    :i64 :int8
+    :uuid :uuid
+    :f64 :float8
+    :bool :boolean}
+   col-type
+   :json))
+
 (def type-mappings
   "Defines how we map from one type to another (pg, java/arrow) where possible."
-  [{:pg :undefined
-    :pg-read-binary (fn [x] (some-> x read-utf8))
-    :pg-read-text (fn [x] (some-> x read-utf8))}
-
-   {:pg :bool
-    :pg-read-binary (fn [barr] (= 1 (nth barr 0 0)))
-    :pg-read-text (fn [barr] (Boolean/parseBoolean (read-utf8 barr)))}
-
-   ;; ints
-   ;; not sure if bit should be mapped to bool?
-   {:pg :bit
+  [{:pg :bit
     :pg-read-binary (fn [barr] (-> barr ByteBuffer/wrap .get))
     :pg-read-text (fn [barr] (-> barr read-ascii Byte/parseByte))}
    {:pg :int2
@@ -334,22 +393,13 @@
    {:pg :int4
     :pg-read-binary (fn [barr] (-> barr ByteBuffer/wrap .getInt))
     :pg-read-text (fn [barr] (-> barr read-ascii Integer/parseInt))}
-   {:pg :int8
-    :pg-read-binary (fn [barr] (-> barr ByteBuffer/wrap .getLong))
-    :pg-read-text (fn [barr] (-> barr read-ascii Long/parseLong))}
 
    ;; floats
    {:pg :float4
     :pg-read-binary (fn [barr] (-> barr ByteBuffer/wrap .getFloat))
     :pg-read-text (fn [barr] (-> barr read-ascii Float/parseFloat))}
-   {:pg :float8
-    :pg-read-binary (fn [barr] (-> barr ByteBuffer/wrap .getDouble))
-    :pg-read-text (fn [barr] (-> barr read-ascii Double/parseDouble))}
 
    ;; strings
-   {:pg :varchar
-    :pg-read-binary read-utf8
-    :pg-read-text read-utf8}
    {:pg :text
     :pg-read-binary read-utf8
     :pg-read-text read-utf8}])
@@ -1243,10 +1293,10 @@
   (swap! conn-state update :cmd-buf (fnil into PersistentQueue/EMPTY) cmds))
 
 (defn cmd-send-query-result [{:keys [conn-status, conn-state] :as conn}
-                             {:keys [query, ^IResultCursor result-cursor fields]}]
+                             {:keys [query, ^IResultCursor result-cursor fields result-format] :as x}]
 
-  (let [projection (mapv ffirst fields)
-        json-bytes (comp utf8 json/json-str json-clj)
+
+  (let [json-bytes (comp utf8 json/json-str json-clj)
 
         ;; this query has been cancelled!
         cancelled-by-client? #(:cancel @conn-state)
@@ -1276,8 +1326,14 @@
            :else
            (try
              (dotimes [idx (.rowCount ^RelationReader rel)]
-               (let [row (mapv (fn [col-name] (.getObject (.readerForName ^RelationReader rel col-name) idx)) projection)]
-                 (cmd-write-msg conn msg-data-row {:vals (mapv json-bytes row)})
+               (let [row (map-indexed
+                          (fn [field-idx {:keys [column-name write-binary write-text]}]
+                            (if (or (= result-format [:binary]) (= (nth result-format field-idx nil) :binary))
+                              (write-binary (.readerForName ^RelationReader rel column-name) idx)
+                              (if write-text
+                                (write-text (.readerForName ^RelationReader rel column-name) idx)
+                                (json-bytes (.getObject (.readerForName ^RelationReader rel column-name) idx))))) fields)]
+                 (cmd-write-msg conn msg-data-row {:vals row})
                  (vswap! n-rows-out inc)))
 
              ;; allow interrupts - this can happen if we are blocking during the row reduce and our conn is forced to close.
@@ -1316,7 +1372,7 @@
     (err-internal generic-msg)))
 
 (def supported-param-oids
-  (set (map (comp oids :pg) type-mappings)))
+  (set (concat (map (comp oids :pg) type-mappings) (map :oid (vals pg-types)))))
 
 (defn- execute-tx [{:keys [node]} dml-buf {:keys [default-all-valid-time?]}]
   (let [tx-ops (mapv (fn [{:keys [transformed-query params]}]
@@ -1334,13 +1390,12 @@
     (let [param-oid (nth arg-types param-idx nil)
           param-format (nth param-format param-idx nil)
           param-format (or param-format (nth param-format param-idx :text))
-          pg-type (oid->kw param-oid)
-          mapping (some #(when (= pg-type (:pg %)) %) type-mappings)
+          mapping (get pg-types-by-oid param-oid)
           _ (when-not mapping (throw (Exception. "Unsupported param type provided for read")))
-          {:keys [pg-read-binary, pg-read-text]} mapping]
+          {:keys [read-binary, read-text]} mapping]
       (if (= :binary param-format)
-        (pg-read-binary param)
-        (pg-read-text param)))))
+        (read-binary param)
+        (read-text param)))))
 
 (defn- cmd-exec-dml [{:keys [conn-state] :as conn} {:keys [dml-type query transformed-query params] :as stmt}]
   (let [xtify-param (->xtify-param stmt)
@@ -1375,7 +1430,7 @@
 (defn cmd-exec-query
   "Given a statement of type :query will execute it against the servers :node and send the results."
   [conn
-   {:keys [query fields bound-query]}]
+   {:keys [query fields bound-query] :as portal}]
   (let [result-cursor
         (try
           (.openCursor ^BoundQuery bound-query)
@@ -1390,7 +1445,7 @@
 
     (when-not (= result-cursor :failed-to-open-cursor)
       (try
-        (cmd-send-query-result conn {:query query, :result-cursor result-cursor :fields fields})
+        (cmd-send-query-result conn (assoc portal :result-cursor result-cursor))
         (catch InterruptedException e
           (log/trace e "Interrupt thrown sending query results")
           (throw e))
@@ -1400,6 +1455,20 @@
         (finally
           ;; try and close the result-cursor (to warn on leak!)
           (close-result-cursor conn result-cursor))))))
+
+
+
+(defn field->pg-type [field]
+  (assoc (set/rename-keys
+          (let [col-type (xtdb.types/field->col-type (val (first field)))]
+            (if (and (vector? col-type) (= :union (first col-type)))
+              (let [col-types (disj (last col-type) :null)]
+                (if (= 1 (count col-types))
+                  (pg-types (col-type->pg-type (first col-types)))
+                  (pg-types (col-type->pg-type col-types))))
+              (pg-types (col-type->pg-type col-type))))
+          {:oid :column-oid})
+         :column-name (key (first field))))
 
 (defn- cmd-send-row-description [conn cols]
   (let [defaults {:column-name ""
@@ -1422,7 +1491,7 @@
     (cmd-send-row-description conn cols)))
 
 (defn cmd-describe-portal [conn {:keys [fields]}]
-  (cmd-send-row-description conn (map ffirst fields)))
+  (cmd-send-row-description conn fields))
 
 (defn cmd-begin [{:keys [node conn-state] :as conn} access-mode]
   (swap! conn-state
@@ -1633,7 +1702,7 @@
                   (try
                     (let [^BoundQuery bound-query (.bind ^PreparedQuery prepared-query query-opts)]
 
-                      {:portal (assoc stmt-with-bind-msg :bound-query bound-query :fields (.columnFields bound-query))
+                      {:portal (assoc stmt-with-bind-msg :bound-query bound-query :fields (map field->pg-type (.columnFields bound-query)))
                        :bind-outcome :success})
                     (catch InterruptedException e
                       (log/trace e "Interrupt thrown binding prepared statement")
