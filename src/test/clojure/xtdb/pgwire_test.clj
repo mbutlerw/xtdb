@@ -363,8 +363,7 @@
 
 (defn q-seq [conn sql]
   (->> (jdbc/execute! conn sql {:builder-fn result-set/as-arrays})
-       (rest)
-       (mapv (fn [row] (mapv (comp json/read-str str) row)))))
+       (rest)))
 
 (defn ping [conn]
   (-> (q conn ["select 'ping' ping"])
@@ -1256,3 +1255,57 @@
 
       (is (= [[2 20 "b"] [1 10 "a"] [3 30 "c"]]
              (sql "SELECT * FROM foo"))))))
+
+;; https://github.com/pgjdbc/pgjdbc/blob/8afde800bce64e9b22a7da10ca6c515017cf7db1/pgjdbc/src/main/java/org/postgresql/jdbc/PgConnection.java#L403
+;; List of types/oids that support binary format
+;;
+
+(deftest test-postgres-types
+  (with-open [conn (jdbc-conn "prepareThreshold" 1 "binaryTransfer" false)]
+    (q-seq conn ["INSERT INTO foo(xt$id, int8, float8, varchar, boolean) VALUES (?, ?, ?, ?, ?)"
+                 #uuid "9e8b41a0-723f-4e6b-babb-c4e6afd17ef2" nil 11.2 nil true]))
+  (with-open [conn (jdbc-conn "prepareThreshold" 1 "binaryTransfer" true)]
+    (q-seq conn ["INSERT INTO foo(xt$id, int8, float8, varchar, boolean) VALUES (?, ?, ?, ?, ?)"
+                 #uuid "7dd2ed62-bb05-43c8-b289-5503d9b19ee6" 2 nil "bb" false])
+    ;;binary format is only requested for preparedStatements in pgjdbc
+    ;;threshold one should mean we test the text and binary format for each type
+    (let [sql #(q-seq conn [%])]
+
+      (testing "uuid"
+        (is (= [[#uuid "7dd2ed62-bb05-43c8-b289-5503d9b19ee6"]
+                [#uuid "9e8b41a0-723f-4e6b-babb-c4e6afd17ef2"]]
+               (sql "SELECT foo.xt$id FROM foo"))
+            "text")
+
+        (is (= [[#uuid "7dd2ed62-bb05-43c8-b289-5503d9b19ee6"]
+                [#uuid "9e8b41a0-723f-4e6b-babb-c4e6afd17ef2"]]
+               (sql "SELECT foo.xt$id FROM foo"))
+            "binary"))
+
+      (testing "int"
+        (is (= [[2] [nil]]
+               (sql "SELECT foo.int8 FROM foo"))
+            "text")
+
+        (is (= [[2] [nil]]
+               (sql "SELECT foo.int8 FROM foo"))
+            "binary"))
+
+      (testing "float8"
+        (is (= [[nil] [11.2]]
+               (sql "SELECT foo.float8 FROM foo"))
+            "text")
+
+        (is (= [[nil] [11.2]]
+               (sql "SELECT foo.float8 FROM foo"))
+            "binary"))
+
+      (testing "varchar"
+        (is (= [["bb"] [nil]]
+               (sql "SELECT foo.varchar FROM foo"))
+            "text")
+
+      (testing "boolean"
+          (is (= [[false] [true]]
+                 (sql "SELECT foo.boolean FROM foo"))
+              "text"))))))
