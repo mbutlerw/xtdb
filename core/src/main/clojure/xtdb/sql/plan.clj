@@ -59,6 +59,7 @@
 
 (defprotocol Scope
   (available-cols [scope chain])
+  (available-tables [scope])
   (find-decls [scope chain]))
 
 (defprotocol TableRef
@@ -67,6 +68,7 @@
 (extend-protocol Scope
   nil
   (available-cols [_ _])
+  (available-tables [_])
   (find-decls [_ _]))
 
 (defn- find-decl [scope chain]
@@ -103,6 +105,7 @@
 (defrecord SubqueryScope [env, scope, ^Map !sq-refs]
   Scope
   (available-cols [_ chain] (available-cols scope chain))
+  (available-tables [_] (available-tables scope))
 
   (find-decls [_ chain]
     (not-empty (->> (find-decls scope chain)
@@ -227,6 +230,8 @@
     (when-not (and chain (not= chain [table-alias]))
       cols))
 
+  (available-tables [_] [table-alias])
+
   (find-decls [_ [col-name table-name]]
     (when (or (nil? table-name) (= table-name table-alias))
       (when (or (contains? cols col-name) (types/temporal-column? col-name))
@@ -260,6 +265,10 @@
          (into [] (comp (mapcat #(available-cols % chain))
                         (distinct)))))
 
+  (available-tables [_]
+    (into (available-tables l)
+          (available-tables r)))
+
   (find-decls [_ chain]
     (->> [l r]
          (mapcat #(find-decls % chain)))))
@@ -273,6 +282,10 @@
     (->> [l r]
          (into [] (comp (mapcat #(available-cols % chain))
                         (distinct)))))
+
+  (available-tables [_]
+    (into (available-tables l)
+          (available-tables r)))
 
   (find-decls [_ chain]
     (->> (if (and (= 1 (count chain))
@@ -329,6 +342,10 @@
          (into [] (comp (mapcat #(available-cols % chain))
                         (distinct)))))
 
+  (available-tables [_]
+    (into (available-tables l)
+          (available-tables r)))
+
   (find-decls [_ chain]
     (->> [l r]
          (mapcat #(find-decls % chain))))
@@ -345,6 +362,8 @@
     (when-not (and chain (not= chain [table-alias]))
       available-cols))
 
+  (available-tables [_] [table-alias])
+
   (find-decls [_ [col-name table-name]]
     (when (or (nil? table-name) (= table-name table-alias))
       (when (.contains available-cols col-name)
@@ -360,6 +379,8 @@
   (available-cols [_ chain]
     (when-not (and chain (not= chain [table-alias]))
       !table-cols))
+
+  (available-tables [_] [table-alias])
 
   (find-decls [_ [col-name table-name]]
     (when (and (or (nil? table-name) (= table-name table-alias))
@@ -415,8 +436,10 @@
       (for [col-ref !implied-gicrs]
         col-ref)))
 
-  Scope
+  Scope 
   (available-cols [_ table-name] (available-cols scope table-name))
+
+  (available-tables [_] (available-tables scope))
 
   (find-decls [_ chain]
     (for [sym (find-decls scope chain)]
@@ -522,6 +545,10 @@
   Scope
   (available-cols [_ chain] (available-cols from-table-ref chain))
 
+  (available-tables [_]
+    (into (available-tables outer-scope)
+          (available-tables from-table-ref)))
+
   (find-decls [_ chain]
     (or (not-empty (find-decls from-table-ref chain))
         (find-decls outer-scope chain)))
@@ -553,8 +580,8 @@
 
                                             excludes (when-let [exclude-ctx (.excludeClause ctx)]
                                                        (into #{} (map identifier-sym) (.identifier exclude-ctx)))]
-
-                                        (vec (for [col-name (available-cols scope nil)
+                                        (vec (for [table-name (available-tables scope)
+                                                   col-name (available-cols scope [table-name])
                                                    :when (not (contains? excludes col-name))
                                                    :let [sym (find-decl scope [col-name table-name])]
                                                    :when (not (contains? excludes sym))]
@@ -616,8 +643,9 @@
 
 (defn- project-all-cols [scope]
   ;; duplicated from the ASTERISK case above
-  {:projected-cols (vec (for [col-name (available-cols scope nil)
-                              :let [sym (find-decl scope [col-name])]]
+  {:projected-cols (vec (for [table-name (available-tables scope)
+                              col-name (available-cols scope [table-name])
+                              :let [sym (find-decl scope [col-name table-name])]]
                           (->ProjectedCol sym sym)))})
 
 (defn seconds-fraction->nanos ^long [seconds-fraction]
@@ -1794,6 +1822,8 @@
   (available-cols [_ chain]
     (when-not (and chain (not= chain [table-alias]))
       cols))
+  
+  (available-tables [_] [table-alias])
 
   (find-decls [_ [col-name table-name]]
     (when (and (or (nil? table-name) (= table-name table-alias))
@@ -1846,6 +1876,8 @@
   (available-cols [_ chain]
     (when-not (and chain (not= chain [table-alias]))
       cols))
+  
+  (available-tables [_] [table-alias])
 
   (find-decls [_ [col-name table-name :as chain]]
     (when (and (or (nil? table-name) (= table-name table-alias))
