@@ -166,12 +166,23 @@
 
                  :quantified-comparison (let [{:keys [expr op]} sq
                                               needle-param (vary-meta '?xt$needle assoc :correlated-column? true)]
-                                          [:apply
-                                           {:mark-join {sq-sym (list op needle-param (first (:col-syms query-plan)))}}
-                                           (assoc sq-refs 'xt$needle needle-param)
-                                           [:map [{'xt$needle expr}]
-                                            plan]
-                                           (:plan query-plan)])))
+
+                                          (if (and (:column? (meta expr))
+                                                   (not (get sq-refs expr)))
+                                              ;;can't apply shortcut if column is already mapped to existing param due to limitation
+                                              ;;of input col as key in sq-refs param map
+                                            [:apply
+                                             {:mark-join {sq-sym (list op needle-param (first (:col-syms query-plan)))}}
+                                             (assoc sq-refs expr needle-param)
+                                             plan
+                                             (:plan query-plan)]
+
+                                            [:apply
+                                             {:mark-join {sq-sym (list op needle-param (first (:col-syms query-plan)))}}
+                                             (assoc sq-refs (->col-sym 'xt$needle) needle-param)
+                                             [:map [{'xt$needle expr}]
+                                              plan]
+                                             (:plan query-plan)]))))
              plan
              subqs))
 
