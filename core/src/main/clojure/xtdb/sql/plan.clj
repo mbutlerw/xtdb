@@ -72,6 +72,10 @@
   (available-tables [_])
   (find-decls [_ _]))
 
+(extend-protocol TableRef
+  nil
+  (plan-table-ref [_] [:table [{}]]))
+
 (defn- find-decl [scope chain]
   (let [[match & more-matches] (find-decls scope chain)]
     (assert (nil? more-matches) (str "multiple decls: " {:matches (cons match more-matches)}))
@@ -378,6 +382,30 @@
     [:rename unique-table-alias
      plan]))
 
+(defrecord LateralTable [env left-table-ref plan sq-refs table-alias unique-table-alias ^SequencedSet cols]
+  Scope
+  (available-cols [_ chain]
+    (->insertion-ordered-set (concat (available-cols left-table-ref chain)
+                                     (when-not (and chain (not= chain [table-alias]))
+                                       cols))))
+
+  (available-tables [_]
+    (concat (available-tables left-table-ref)
+            [table-alias]))
+
+  (find-decls [_ [col-name table-name :as chain]]
+    (concat (find-decls left-table-ref chain)
+            (when (or (nil? table-name) (= table-name table-alias))
+              (when (.contains cols col-name)
+                [(->col-sym (str unique-table-alias) (str col-name))]))))
+
+  TableRef
+  (plan-table-ref [_]
+    [:apply :cross-join sq-refs
+     (plan-table-ref left-table-ref)
+     [:rename unique-table-alias
+      plan]]))
+
 (defrecord UnnestTable [env left-table-ref table-alias unique-table-alias unnest-col unnest-expr ordinality-col]
   Scope
   (available-cols [_ chain]
@@ -567,6 +595,20 @@
                           (symbol (str table-alias "." (swap! !id-count inc)))
                           (LinkedHashSet. ^Collection col-syms))
           (wrap-left-table-ref env left-table-ref))))
+
+  (visitLateralDerivedTable [{{:keys [!id-count]} :env} ctx]
+    (let [!sq-refs (HashMap.)
+          {:keys [plan col-syms]} (-> (.subquery ctx) (.queryExpression)
+                                      (.accept (-> (->QueryPlanVisitor env (if left-table-ref
+                                                                             (->SubqueryScope env left-table-ref !sq-refs)
+                                                                             scope))
+                                                   (assoc :out-col-syms (->table-projection (.tableProjection ctx))))))
+
+          table-alias (identifier-sym (.tableAlias ctx))]
+
+      (->LateralTable env left-table-ref plan (into {} !sq-refs)
+                      table-alias (symbol (str table-alias "." (swap! !id-count inc)))
+                      (LinkedHashSet. ^Collection col-syms))))
 
   (visitCollectionDerivedTable [{{:keys [!id-count]} :env} ctx]
     (assert left-table-ref "Collection derived tables are not yet allowed in this context")

@@ -1239,9 +1239,9 @@
 (deftest test-select-star-lateral-join
   (xt/submit-tx tu/*node* [[:put-docs :y {:xt/id 1 :b "one"}]])
 
-  (t/is (= [{:b "one", :b:1 "one"}]
+  (t/is (= [{:x-b "one", :outer-b "one", :z-b "one"}]
            (xt/q tu/*node*
-                 "SELECT * FROM (SELECT y.b FROM y) AS x, LATERAL (SELECT y.b FROM y) AS z"))))
+                 "SELECT * FROM (SELECT y.b FROM y) AS x (x_b), LATERAL (SELECT y.b AS z_b, x_b FROM y) AS z (z_b, outer_b)"))))
 
 (deftest test-select-star-subquery
   (xt/submit-tx tu/*node* [[:put-docs :y {:xt/id 1 :b "one" :a 2}]])
