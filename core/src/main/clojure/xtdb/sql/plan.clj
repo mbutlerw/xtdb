@@ -378,6 +378,32 @@
     [:rename unique-table-alias
      plan]))
 
+(defrecord UnnestTable [env left-table-ref table-alias unique-table-alias unnest-col unnest-expr ordinality-col]
+  Scope
+  (available-cols [_ chain]
+    (when-not (and chain (not= chain [table-alias]))
+      (->insertion-ordered-set (cond-> [unnest-col]
+                                 ordinality-col (conj ordinality-col)))))
+
+  (available-tables [_] [table-alias])
+
+  (find-decls [_ [col-name table-name]]
+    (when (or (nil? table-name) (= table-name table-alias))
+      (condp = col-name
+        unnest-col [(-> (->col-sym (str unique-table-alias) (str col-name))
+                        (with-meta (meta unnest-col)))]
+        ordinality-col [(-> (->col-sym (str unique-table-alias) (str ordinality-col))
+                            (with-meta (meta ordinality-col)))])))
+
+  TableRef
+  (plan-table-ref [_]
+    (-> [:unnest {(-> (->col-sym (str unique-table-alias) (str unnest-col))
+                      (with-meta (meta unnest-col)))
+                  unnest-expr}]
+        (cond-> ordinality-col (conj {:ordinality-column (-> (->col-sym (str unique-table-alias) (str ordinality-col))
+                                                             (with-meta (meta ordinality-col)))}))
+        (conj (plan-table-ref left-table-ref)))))
+
 (defrecord ArrowTable [env url table-alias unique-table-alias ^SequencedSet !table-cols]
   Scope
   (available-cols [_ chain]
@@ -542,6 +568,29 @@
                           (LinkedHashSet. ^Collection col-syms))
           (wrap-left-table-ref env left-table-ref))))
 
+  (visitCollectionDerivedTable [{{:keys [!id-count]} :env} ctx]
+    (assert left-table-ref "Collection derived tables are not yet allowed in this context")
+
+    (let [expr (-> (.expr ctx)
+                   (.accept (->ExprPlanVisitor env (or left-table-ref scope))))
+          table-projection (->table-projection (.tableProjection ctx))
+          table-alias (identifier-sym (.tableAlias ctx))
+          with-ordinality? (boolean (.withOrdinality ctx))]
+
+      (assert (or (nil? table-projection)
+                  (= (+ 1 (if with-ordinality? 1 0)) (count table-projection))))
+
+      (->UnnestTable env left-table-ref table-alias
+                     (symbol (str table-alias "." (swap! !id-count inc)))
+                     (or (->col-sym (first table-projection))
+                         (-> (->col-sym (str "xt$unnest." (swap! !id-count inc)))
+                             (vary-meta assoc :unnamed-unnest-col? true)))
+                     expr
+                     (when with-ordinality?
+                       (or (->col-sym (second table-projection))
+                           (-> (->col-sym (str "xt$ordinal." (swap! !id-count inc)))
+                               (vary-meta assoc :unnamed-unnest-col? true)))))))
+
   (visitWrappedTableReference [this ctx] (-> (.tableReference ctx) (.accept this)))
 
   (visitArrowTable [{{:keys [!id-count]} :env} ctx]
@@ -570,6 +619,14 @@
       (plan-table-ref from-table-ref)
       [:table [{}]])))
 
+(defn- ->projected-col-expr [col-idx expr]
+  (let [{:keys [column? sq-out-sym? agg-out-sym? unnamed-unnest-col? identifier]} (meta expr)]
+    (if (and column? (not sq-out-sym?) (not agg-out-sym?) (not unnamed-unnest-col?))
+      (->ProjectedCol expr expr)
+      (let [col-name (or (:identifier (meta expr))
+                         (->col-sym (str "xt$column_" (inc col-idx))))]
+        (->ProjectedCol {col-name expr} col-name)))))
+
 (defrecord SelectClauseProjectedCols [env scope]
   SqlVisitor
   (visitSelectClause [_ ctx]
@@ -591,14 +648,17 @@
 
                                             excludes (when-let [exclude-ctx (.excludeClause ctx)]
                                                        (into #{} (map identifier-sym) (.identifier exclude-ctx)))]
-                                        (vec (for [table-name (available-tables scope)
+                                        (->> (for [table-name (available-tables scope)
                                                    col-name (available-cols scope [table-name])
                                                    :when (not (contains? excludes col-name))
                                                    :let [sym (find-decl scope [col-name table-name])]
                                                    :when (not (contains? excludes sym))]
-                                               (if-let [renamed-col (get renames sym)]
-                                                 (->ProjectedCol {renamed-col sym} renamed-col)
-                                                 (->ProjectedCol sym sym))))))
+                                               sym)
+                                             (map-indexed (fn [col-idx sym]
+                                                            (if-let [renamed-col (get renames sym)]
+                                                              (->ProjectedCol {renamed-col sym} renamed-col)
+                                                              (->projected-col-expr col-idx sym))))
+                                             (into []))))
 
                                     (visitSelectListCols [_ ctx]
                                       (->> (.selectSublist ctx)
@@ -613,12 +673,7 @@
                                                                                (let [col-name (->col-sym (identifier-sym as-clause))]
                                                                                  (->ProjectedCol {col-name expr} col-name))
 
-                                                                               (let [{:keys [column? sq-out-sym? agg-out-sym?]} (meta expr)]
-                                                                                 (if (and column? (not sq-out-sym?) (not agg-out-sym?))
-                                                                                   (->ProjectedCol expr expr)
-                                                                                   (let [col-name (or (:identifier (meta expr))
-                                                                                                      (->col-sym (str "xt$column_" (inc col-idx))))]
-                                                                                     (->ProjectedCol {col-name expr} col-name))))))])
+                                                                               (->projected-col-expr col-idx expr)))])
 
                                                                         (visitQualifiedAsterisk [_ ctx] 
                                                                           (let [[table-name schema-name] (rseq (mapv identifier-sym (.identifier (.identifierChain ctx))))]
@@ -637,13 +692,15 @@
                                                                                                  (into {}))
                                                                                     excludes (when-let [exclude-ctx (.excludeClause ctx)]
                                                                                                (into #{} (map identifier-sym) (.identifier exclude-ctx)))] 
-                                                                                (vec (for [col-name table-cols
+                                                                                (->> (for [col-name table-cols
                                                                                            :when (not (contains? excludes col-name))
                                                                                            :let [sym (find-decl scope [col-name table-name])]
                                                                                            :when (not (contains? excludes sym))]
-                                                                                       (if-let [renamed-col (get renames sym)]
-                                                                                         (->ProjectedCol {renamed-col sym} renamed-col)
-                                                                                         (->ProjectedCol sym sym)))))
+                                                                                       sym)
+                                                                                     (into [] (map-indexed (fn [col-idx sym]
+                                                                                                             (if-let [renamed-col (get renames sym)]
+                                                                                                               (->ProjectedCol {renamed-col sym} renamed-col)
+                                                                                                               (->projected-col-expr col-idx sym)))))))
                                                                               
                                                                               (throw (UnsupportedOperationException. (str "Table not found: " table-name))))))))))
                                                           cat))))))]
@@ -654,10 +711,11 @@
 
 (defn- project-all-cols [scope]
   ;; duplicated from the ASTERISK case above
-  {:projected-cols (vec (for [table-name (available-tables scope)
+  {:projected-cols (->> (for [table-name (available-tables scope)
                               col-name (available-cols scope [table-name])
                               :let [sym (find-decl scope [col-name table-name])]]
-                          (->ProjectedCol sym sym)))})
+                          sym)
+                        (into [] (map-indexed ->projected-col-expr)))})
 
 (defn seconds-fraction->nanos ^long [seconds-fraction]
   (if seconds-fraction
@@ -1564,14 +1622,15 @@
   (let [out-projections (->> col-syms
                              (into [] (map (fn [col-sym]
                                              (if (namespace col-sym)
-                                               (let [out-sym (->col-sym (name col-sym))]
+                                               (let [out-sym (-> (->col-sym (name col-sym))
+                                                                 (with-meta (meta col-sym)))]
                                                  (->ProjectedCol {out-sym col-sym}
                                                                  out-sym))
                                                (->ProjectedCol col-sym col-sym))))))
         out-col-syms (mapv :col-sym out-projections)
         duplicate-col-syms (not-empty (dups out-col-syms))]
     (if duplicate-col-syms
-      (for [sym duplicate-col-syms]
+      (doseq [sym duplicate-col-syms]
         (add-err! env (->DuplicateColumnProjection sym)))
       (->QueryExpr [:project (mapv :projection out-projections) plan] out-col-syms))))
 

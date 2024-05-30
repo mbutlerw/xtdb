@@ -253,12 +253,12 @@
 
   (t/is (=plan-file
           "basic-query-30"
-          (plan-sql "SELECT * FROM StarsIn AS si(films), UNNEST(si.films) AS film"
+          (plan-sql "SELECT * FROM StarsIn AS si, UNNEST(si.films) AS film"
                     {:table-info {"stars_in" #{"films"}}})))
 
   (t/is (=plan-file
           "basic-query-30"
-          (plan-sql "FROM StarsIn, UNNEST(films) AS film"
+          (plan-sql "FROM StarsIn si, UNNEST(films) AS film"
                     {:table-info {"stars_in" #{"films"}}}))
 
         "implicit SELECT *")
@@ -272,7 +272,12 @@
           "basic-query-31"
           (plan-sql "FROM StarsIn AS si, UNNEST(si.films) WITH ORDINALITY AS film"
                     {:table-info {"stars_in" #{"films"}}}))
-        "implicit SELECT *"))
+        "implicit SELECT *")
+
+  (t/is (=plan-file
+          "unnest-query-1"
+          (plan-sql "SELECT * FROM StarsIn AS si, UNNEST(si.films) WITH ORDINALITY AS film(film, film_ord)"
+                    {:table-info {"stars_in" #{"films"}}}))))
 
 (deftest test-cross-join
   (t/is (=plan-file

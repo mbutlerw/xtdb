@@ -1,0 +1,6 @@
+[:project
+ [{film film.2/film} {film_ord film.2/film_ord}]
+ [:unnest
+  {film.2/film si.1/films}
+  {:ordinality-column film.2/film_ord}
+  [:rename si.1 [:scan {:table stars_in} [films]]]]]

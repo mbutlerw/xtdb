@@ -1,8 +1,5 @@
-[:rename
- {x3 name}
- [:project
-  [x3]
-  [:unnest
-   {x3 x1}
-   {}
-   [:rename {films x1} [:scan {:table stars_in} [films]]]]]]
+[:project
+ [{name film.2/name}]
+ [:unnest
+  {film.2/name si.1/films}
+  [:rename si.1 [:scan {:table stars_in} [films]]]]]
