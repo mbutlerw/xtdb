@@ -1579,6 +1579,11 @@
   PlanError
   (error-string [_] "INSERT does not contain mandatory xt$id column"))
 
+(defrecord SetOperationColumnCountMismatch [operation-type lhs-count rhs-count]
+  PlanError
+  (error-string [_] 
+    (format "Column count mismatch on %s set operation: lhs column count %s, rhs column count %s" operation-type lhs-count rhs-count)))
+
 (defrecord QueryPlanVisitor [env scope]
   SqlVisitor
   (visitWrappedQuery [this ctx] (-> (.queryExpressionBody ctx) (.accept this)))
@@ -1623,46 +1628,71 @@
                                               (or (some-> (.fetchFirstRowCount limit-clause)
                                                           (.accept expr-visitor))
                                                   1))}
-                               plan]))))))))
+                               plan])))))))) 
 
   (visitUnionQuery [this ctx]
-    (let [{l-plan :plan, :keys [col-syms]} (-> (.queryExpressionBody ctx 0) (.accept this)
-                                               (remove-ns-qualifiers env))
-          {r-plan :plan} (-> (.queryExpressionBody ctx 1) (.accept this)
-                             (remove-ns-qualifiers env))
-          plan [:union-all l-plan r-plan]]
-      ;; TODO column matching
+    (let [{l-plan :plan, l-col-syms :col-syms} (-> (.queryExpressionBody ctx 0) (.accept this)
+                                                   (remove-ns-qualifiers env))
 
-      (->QueryExpr (if-not (.ALL ctx)
-                     [:distinct plan]
-                     plan)
-                   col-syms)))
+          {r-plan :plan, r-col-syms :col-syms} (-> (.queryExpressionBody ctx 1) (.accept this)
+                                                   (remove-ns-qualifiers env))
+
+          _ (when-not (= (count l-col-syms) (count r-col-syms))
+              (add-err! env (->SetOperationColumnCountMismatch "UNION" (count l-col-syms) (count r-col-syms))))
+          
+          rename-col-syms (fn [plan]
+                            (if (not= l-col-syms r-col-syms)
+                              [:rename (zipmap r-col-syms l-col-syms) plan]
+                              plan)) 
+          
+          plan [:union-all l-plan (rename-col-syms r-plan)]]
+      (->QueryExpr (if-not (.ALL ctx) [:distinct plan] plan) l-col-syms)))
 
   (visitExceptQuery [this ctx]
-    (let [{l-plan :plan, :keys [col-syms]} (-> (.queryExpressionBody ctx 0) (.accept this)
-                                               (remove-ns-qualifiers env))
-          {r-plan :plan} (-> (.queryExpressionBody ctx 1) (.accept this)
-                             (remove-ns-qualifiers env))
-          distinct? (not (.ALL ctx))]
-      ;; TODO column matching
+    (let [{l-plan :plan, l-col-syms :col-syms} (-> (.queryExpressionBody ctx 0) (.accept this)
+                                                   (remove-ns-qualifiers env))
 
+          {r-plan :plan, r-col-syms :col-syms} (-> (.queryExpressionBody ctx 1) (.accept this)
+                                                   (remove-ns-qualifiers env))
+
+          _ (when-not (= (count l-col-syms) (count r-col-syms))
+              (add-err! env (->SetOperationColumnCountMismatch "EXCEPT" (count l-col-syms) (count r-col-syms))))
+
+          rename-col-syms (fn [plan] 
+                            (if (not= l-col-syms r-col-syms)
+                              [:rename (zipmap r-col-syms l-col-syms) plan]
+                              plan))
+          
+          wrap-distinct (fn [plan]
+                          (if (not (.ALL ctx))
+                            [:distinct plan]
+                            plan))]
+      
       (->QueryExpr [:difference
-                    (if distinct? [:distinct l-plan] l-plan)
-                    (if distinct? [:distinct r-plan] r-plan)]
-                   col-syms)))
+                    (wrap-distinct l-plan)
+                    (rename-col-syms (wrap-distinct r-plan))]
+                   l-col-syms)))
 
   (visitIntersectQuery [this ctx]
-    (let [{l-plan :plan, :keys [col-syms]} (-> (.queryExpressionBody ctx 0) (.accept this)
-                                               (remove-ns-qualifiers env))
-          {r-plan :plan} (-> (.queryExpressionBody ctx 1) (.accept this)
-                             (remove-ns-qualifiers env))
-          plan [:intersect l-plan r-plan]]
-      ;; TODO column matching
+    (let [{l-plan :plan, l-col-syms :col-syms} (-> (.queryExpressionBody ctx 0) (.accept this)
+                                                   (remove-ns-qualifiers env))
 
+          {r-plan :plan, r-col-syms :col-syms} (-> (.queryExpressionBody ctx 1) (.accept this)
+                                                   (remove-ns-qualifiers env))
+
+          _ (when-not (= (count l-col-syms) (count r-col-syms))
+              (add-err! env (->SetOperationColumnCountMismatch "INTERSECT" (count l-col-syms) (count r-col-syms))))
+          
+          rename-col-syms (fn [plan]
+                            (if (not= l-col-syms r-col-syms)
+                              [:rename (zipmap r-col-syms l-col-syms) plan]
+                              plan))
+          
+          plan [:intersect l-plan (rename-col-syms r-plan)]]
       (->QueryExpr (if-not (.ALL ctx)
                      [:distinct plan]
                      plan)
-                   col-syms)))
+                   l-col-syms)))
 
   (visitQuerySpecification [{:keys [out-col-syms order-by-ctx]} ctx]
     (let [qs-scope (->QuerySpecificationScope scope

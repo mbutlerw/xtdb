@@ -1505,3 +1505,28 @@
   (xt/execute-tx tu/*node* [[:put-docs :docs {:xt/id :foo :bar 1}]])
   (t/is (:committed? (xt/execute-tx tu/*node* [[:sql "ERASE FROM docs WHERE docs.xt$id IN (SELECT docs.xt$id FROM docs WHERE docs.bar = 1)"]])))
   (t/is (= [] (xt/q tu/*node* "SELECT * FROM docs"))))
+
+(deftest test-set-operations-with-different-column-names
+  (t/testing "Union"
+    (xt/execute-tx tu/*node* [[:put-docs :foo1 {:xt/id 1 :x 1}]
+                              [:put-docs :bar1 {:xt/id 1 :y 2}]])
+    
+    (t/is (= [{:x 1} {:x 2}]
+             (xt/q tu/*node* "SELECT x FROM foo1 UNION SELECT y FROM bar1"))))
+  
+  (t/testing "Except"
+    (xt/execute-tx tu/*node* [[:put-docs :foo2 {:xt/id 1 :x 1}]
+                              [:put-docs :foo2 {:xt/id 2 :x 2}]
+                              [:put-docs :bar2 {:xt/id 1 :y 1}]])
+    
+    (t/is (= [{:x 2}]
+             (xt/q tu/*node* "SELECT x FROM foo2 EXCEPT SELECT y FROM bar2"))))
+  
+  (t/testing "Intersect"
+    (xt/execute-tx tu/*node* [[:put-docs :foo3 {:xt/id 1 :x 1}]
+                              [:put-docs :foo3 {:xt/id 2 :x 2}]
+                              [:put-docs :bar3 {:xt/id 1 :y 1}]])
+  
+    (t/is (= [{:x 1}]
+             (xt/q tu/*node* "SELECT x FROM foo3 INTERSECT SELECT y FROM bar3")))))
+
