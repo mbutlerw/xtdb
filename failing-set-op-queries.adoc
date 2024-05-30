@@ -1,0 +1,242 @@
+= Failing set operator queries on Select4.test
+
+Made a number of changes today with set operators in order to prevent the following:
+* Renamed the right hand side columns of a set operator to match the left hand side columns - prevents us getting a number of `union incompatible cols` errors.
+* Added an explicit check in the planner that the left hand side and right hand side of the queries have the same number of columns.
+* Added tests & a grammar change to ensure that `INTERSECT` is applied first, before UNION and EXCEPT.
+
+Now - we still see a large number of query failures inside of `select4.test` - I've pulled the inserts & one of the queries out to a separate file to investigate.
+
+The file in question is `failing-union.test`, and can be ran via a comment in `runner.clj`.
+
+The query in question is:
+```sql
+  SELECT e9 FROM t9
+   WHERE (a9=824)
+      OR c9 in (834,332,579,857,809)
+EXCEPT
+  SELECT c6 FROM t6
+   WHERE NOT (a6 in (643,85,787,104,971,540,45,672,811,222))
+EXCEPT
+  SELECT a5 FROM t5
+   WHERE NOT (d5 in (782,570,910,171,369,313)
+           OR (667=a5 OR 733=c5))
+UNION ALL
+  SELECT d2 FROM t2
+   WHERE (e2=463 AND b2=264 AND d2=405 AND c2=312 AND a2=901)
+      OR (455=a2 AND 556=e2)
+UNION ALL
+  SELECT b1 FROM t1
+   WHERE (a1=742 AND b1=836 AND 506=c1)
+UNION
+  SELECT d7 FROM t7
+   WHERE (e7=156)
+      OR (b7=827 AND a7=936 AND 196=d7)
+      OR (758=a7 AND d7=172)
+EXCEPT
+  SELECT e4 FROM t4
+   WHERE NOT ((a4=281 AND 549=d4 AND c4=752))
+EXCEPT
+  SELECT d3 FROM t3
+   WHERE NOT ((c3=127))
+```
+
+It outputs the following query plan when it is ran:
+
+```clojure
+{:plan
+ [:difference
+  [:distinct
+   [:difference
+    [:distinct
+     [:difference
+      [:distinct
+       [:difference
+        [:distinct
+         [:project
+          [{e9 t9.1/e9}]
+          [:select
+           (or (= t9.1/a9 824) xt$sq_0)
+           [:mark-join
+            {xt$sq_0 [(= xt$needle xt.values.2/xt$column_1)]}
+            [:map
+             [{xt$needle t9.1/c9}]
+             [:rename t9.1 [:scan {:table t9} [a9 e9 c9]]]]
+            [:rename
+             xt.values.2
+             [:table
+              [xt$column_1]
+              [{:xt$column_1 834}
+               {:xt$column_1 332}
+               {:xt$column_1 579}
+               {:xt$column_1 857}
+               {:xt$column_1 809}]]]]]]]
+        [:rename
+         {c6 e9}
+         [:distinct
+          [:project
+           [{c6 t6.3/c6}]
+           [:map
+            [{xt$sq_0 true}]
+            [:anti-join
+             [(= xt$needle xt.values.4/xt$column_1)]
+             [:map
+              [{xt$needle t6.3/a6}]
+              [:rename t6.3 [:scan {:table t6} [a6 c6]]]]
+             [:rename
+              xt.values.4
+              [:table
+               [xt$column_1]
+               [{:xt$column_1 643}
+                {:xt$column_1 85}
+                {:xt$column_1 787}
+                {:xt$column_1 104}
+                {:xt$column_1 971}
+                {:xt$column_1 540}
+                {:xt$column_1 45}
+                {:xt$column_1 672}
+                {:xt$column_1 811}
+                {:xt$column_1 222}]]]]]]]]]]
+      [:rename
+       {a5 e9}
+       [:distinct
+        [:distinct
+         [:union-all
+          [:union-all
+           [:union-all
+            [:project
+             [{a5 t5.5/a5}]
+             [:select
+              (not (or xt$sq_0 (or (= 667 t5.5/a5) (= 733 t5.5/c5))))
+              [:mark-join
+               {xt$sq_0 [(= xt$needle xt.values.6/xt$column_1)]}
+               [:map
+                [{xt$needle t5.5/d5}]
+                [:rename t5.5 [:scan {:table t5} [d5 a5 c5]]]]
+               [:rename
+                xt.values.6
+                [:table
+                 [xt$column_1]
+                 [{:xt$column_1 782}
+                  {:xt$column_1 570}
+                  {:xt$column_1 910}
+                  {:xt$column_1 171}
+                  {:xt$column_1 369}
+                  {:xt$column_1 313}]]]]]]
+            [:rename
+             {d2 a5}
+             [:project
+              [{d2 t2.7/d2}]
+              [:rename
+               t2.7
+               [:select
+                (or
+                 (and
+                  (and
+                   (and (and (= e2 463) (= b2 264)) (= d2 405))
+                   (= c2 312))
+                  (= a2 901))
+                 (and (= 455 a2) (= 556 e2)))
+                [:scan {:table t2} [c2 e2 b2 d2 a2]]]]]]]
+           [:rename
+            {b1 a5}
+            [:project
+             [{b1 t1.8/b1}]
+             [:rename
+              t1.8
+              [:scan
+               {:table t1}
+               [{c1 (= 506 c1)} {b1 (= b1 836)} {a1 (= a1 742)}]]]]]]
+          [:rename
+           {d7 a5}
+           [:project
+            [{d7 t7.9/d7}]
+            [:rename
+             t7.9
+             [:select
+              (or
+               (or
+                (= e7 156)
+                (and (and (= b7 827) (= a7 936)) (= 196 d7)))
+               (and (= 758 a7) (= d7 172)))
+              [:scan {:table t7} [b7 d7 a7 e7]]]]]]]]]]]]
+    [:rename
+     {e4 e9}
+     [:distinct
+      [:project
+       [{e4 t4.10/e4}]
+       [:rename
+        t4.10
+        [:select
+         (not (and (and (= a4 281) (= 549 d4)) (= c4 752)))
+         [:scan {:table t4} [e4 d4 a4 c4]]]]]]]]]
+  [:rename
+   {d3 e9}
+   [:distinct
+    [:project
+     [{d3 t3.11/d3}]
+     [:rename
+      t3.11
+      [:scan {:table t3} [d3 {c3 (not (= c3 127))}]]]]]]],
+ :col-syms [e9]}
+  SELECT e9 FROM t9
+   WHERE (a9=824)
+      OR c9 in (834,332,579,857,809)
+EXCEPT
+  SELECT c6 FROM t6
+   WHERE NOT (a6 in (643,85,787,104,971,540,45,672,811,222))
+EXCEPT
+  SELECT a5 FROM t5
+   WHERE NOT (d5 in (782,570,910,171,369,313)
+           OR (667=a5 OR 733=c5))
+UNION ALL
+  SELECT d2 FROM t2
+   WHERE (e2=463 AND b2=264 AND d2=405 AND c2=312 AND a2=901)
+      OR (455=a2 AND 556=e2)
+UNION ALL
+  SELECT b1 FROM t1
+   WHERE (a1=742 AND b1=836 AND 506=c1)
+UNION
+  SELECT d7 FROM t7
+   WHERE (e7=156)
+      OR (b7=827 AND a7=936 AND 196=d7)
+      OR (758=a7 AND d7=172)
+EXCEPT
+  SELECT e4 FROM t4
+   WHERE NOT ((a4=281 AND 549=d4 AND c4=752))
+EXCEPT
+  SELECT d3 FROM t3
+   WHERE NOT ((c3=127))
+```
+
+It is **expected** to output the following results:
+
+```
+172
+196
+225
+675 
+704
+836
+995
+```
+
+Instead, it returns the following:
+```
+704
+995
+```
+
+Interestingly - if the the precedence of `EXCEPT` and `UNION` is changed (ie, they are swapped around in the grammar, so `EXCEPT` applies first), we see the following results returned:
+```
+172
+196
+225
+307
+405
+675
+704
+836
+944
+995
+```
