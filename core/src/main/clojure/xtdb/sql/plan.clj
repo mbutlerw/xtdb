@@ -69,11 +69,6 @@
   (available-cols [_ _])
   (find-decls [_ _]))
 
-(extend-protocol TableRef
-  nil
-  (plan-table-ref [_]
-    [:table [{}]]))
-
 (defn- find-decl [scope chain]
   (let [[match & more-matches] (find-decls scope chain)]
     (assert (nil? more-matches) (str "multiple decls: " {:matches (cons match more-matches)}))
@@ -342,7 +337,7 @@
   (plan-table-ref [_]
     (let [planned-l (plan-table-ref l)
           planned-r (plan-table-ref r)]
-      [:mega-join [] [planned-l planned-r]])))
+      [:cross-join planned-l planned-r])))
 
 (defrecord DerivedTable [env plan table-alias unique-table-alias ^SequencedSet available-cols]
   Scope
@@ -359,24 +354,6 @@
   (plan-table-ref [_]
     [:rename unique-table-alias
      plan]))
-
-(defrecord FromClauseScope [env inner-scope table-ref-scopes]
-  Scope
-  (available-cols [_ chain]
-    (->> table-ref-scopes
-         (into [] (comp (mapcat #(available-cols % chain)) (distinct)))))
-
-  (find-decls [_ chain]
-    (or (not-empty (->> table-ref-scopes
-                        (mapcat #(find-decls % chain))))
-        (find-decls inner-scope chain)))
-
-  TableRef
-  (plan-table-ref [_]
-    (case (count table-ref-scopes)
-      0 [:table [{}]]
-      1 (plan-table-ref (first table-ref-scopes))
-      [:mega-join [] (mapv plan-table-ref table-ref-scopes)])))
 
 (defn- ->table-projection [^ParserRuleContext ctx]
   (some-> ctx
@@ -447,13 +424,13 @@
          plan]
         plan))))
 
-(defrecord TableRefVisitor [env scope]
-  SqlVisitor
-  (visitFromClause [this ctx]
-    (->FromClauseScope env scope
-                       (->> (.tableReference ctx)
-                            (mapv #(.accept ^ParserRuleContext % this)))))
+(defn- wrap-left-table-ref [r env l]
+  (if l
+    (->CrossJoinTable env l r)
+    r))
 
+(defrecord TableRefVisitor [env scope left-table-ref]
+  SqlVisitor
   (visitBaseTable [{{:keys [!id-count table-info ctes] :as env} :env} ctx]
     (let [tn (some-> (.tableOrQueryName ctx) (.tableName))
           sn (identifier-sym (.schemaName tn))
@@ -463,12 +440,17 @@
           cols (some-> (.tableProjection ctx) (->table-projection))]
       (or (when-not sn
             (when-let [{:keys [plan], cte-cols :col-syms} (get ctes tn)]
-              (->DerivedTable env plan table-alias unique-table-alias
-                              (->insertion-ordered-set (or cols cte-cols)))))
+              (-> (->DerivedTable env plan table-alias unique-table-alias
+                                  (->insertion-ordered-set (or cols cte-cols)))
+                  (wrap-left-table-ref env left-table-ref))))
 
-          (->BaseTable env ctx sn tn table-alias unique-table-alias
-                       (->insertion-ordered-set (or cols (get table-info tn)))
-                       (HashMap.)))))
+          (let [table-cols (get table-info (if sn
+                                             (symbol (str sn) (str tn))
+                                             tn))]
+            (-> (->BaseTable env ctx sn tn table-alias unique-table-alias
+                             (->insertion-ordered-set (or cols table-cols))
+                             (HashMap.))
+                (wrap-left-table-ref env left-table-ref))))))
 
   (visitJoinTable [this ctx]
     (let [l (-> (.tableReference ctx 0) (.accept this))
@@ -480,19 +462,22 @@
                                    (->> (.columnNameList ctx) (.columnName)
                                         (into #{} (map (comp ->col-sym identifier-sym)))))))]
 
-      (->JoinTable env l r (.joinType ctx) (.joinSpecification ctx) common-cols)))
+      (-> (->JoinTable env l r (.joinType ctx) (.joinSpecification ctx) common-cols)
+          (wrap-left-table-ref env left-table-ref))))
 
   (visitCrossJoinTable [this ctx]
-    (->CrossJoinTable env
-                      (-> (.tableReference ctx 0) (.accept this))
-                      (-> (.tableReference ctx 1) (.accept this))))
+    (-> (->CrossJoinTable env
+                          (-> (.tableReference ctx 0) (.accept this))
+                          (-> (.tableReference ctx 1) (.accept this)))
+        (wrap-left-table-ref env left-table-ref)))
 
   (visitNaturalJoinTable [this ctx]
     (let [l (-> (.tableReference ctx 0) (.accept this))
           r (-> (.tableReference ctx 1) (.accept this))
           common-cols (set/intersection (set (available-cols l nil)) (set (available-cols r nil)))]
 
-      (->JoinTable env l r (.joinType ctx) nil common-cols)))
+      (-> (->JoinTable env l r (.joinType ctx) nil common-cols)
+          (wrap-left-table-ref env left-table-ref))))
 
   (visitDerivedTable [{{:keys [!id-count]} :env} ctx]
     (let [{:keys [plan col-syms]} (-> (.subquery ctx) (.queryExpression)
@@ -501,11 +486,26 @@
 
           table-alias (identifier-sym (.tableAlias ctx))]
 
-      (->DerivedTable env plan table-alias
-                      (symbol (str table-alias "." (swap! !id-count inc)))
-                      (LinkedHashSet. ^Collection col-syms))))
+      (-> (->DerivedTable env plan table-alias
+                          (symbol (str table-alias "." (swap! !id-count inc)))
+                          (LinkedHashSet. ^Collection col-syms))
+          (wrap-left-table-ref env left-table-ref))))
 
   (visitWrappedTableReference [this ctx] (-> (.tableReference ctx) (.accept this))))
+
+(defrecord QuerySpecificationScope [outer-scope from-table-ref]
+  Scope
+  (available-cols [_ chain] (available-cols from-table-ref chain))
+
+  (find-decls [_ chain]
+    (or (not-empty (find-decls from-table-ref chain))
+        (find-decls outer-scope chain)))
+
+  TableRef
+  (plan-table-ref [_]
+    (if from-table-ref
+      (plan-table-ref from-table-ref)
+      [:table [{}]])))
 
 (defrecord SelectClauseProjectedCols [env scope]
   SqlVisitor
@@ -1554,9 +1554,12 @@
                    col-syms)))
 
   (visitQuerySpecification [{:keys [out-col-syms order-by-ctx]} ctx]
-    (let [qs-scope (if-let [from (.fromClause ctx)]
-                     (.accept from (->TableRefVisitor env scope))
-                     scope)
+    (let [qs-scope (->QuerySpecificationScope scope
+                                              (when-let [from (.fromClause ctx)]
+                                                (reduce (fn [left-table-ref ^ParserRuleContext table-ref]
+                                                          (.accept table-ref (->TableRefVisitor env scope left-table-ref)))
+                                                        nil
+                                                        (.tableReference from))))
 
           where-plan (when-let [where-clause (.whereClause ctx)]
                        (let [!subqs (HashMap.)]
