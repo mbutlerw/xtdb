@@ -6,7 +6,6 @@
    [customers.1/name
     customers.1/custno
     customers.1/country
-    xt$needle
     xt$sq_0
     xt$row_number_0
     {xt$row_count_5 (row-count)}]
@@ -17,12 +16,10 @@
      [:map
       [{xt$sq_0 true}]
       [:semi-join
-       [(= xt$needle country)]
-       [:map
-        [{xt$needle customers.1/country}]
-        [:rename
-         customers.1
-         [:scan {:table customers} [name custno country]]]]
+       [{customers.1/country country}]
+       [:rename
+        customers.1
+        [:scan {:table customers} [name custno country]]]
        [:project
         [{country salesp.2/country}]
         [:rename salesp.2 [:scan {:table salesp} [country]]]]]]]

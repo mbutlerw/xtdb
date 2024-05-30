@@ -22,12 +22,12 @@
         []
         [:map
          [{xt$sq_2 true}]
-         [:anti-join
-          [{c.1/c_custkey o_custkey}]
-          [:map
-           [{xt$sq_0 true}]
+         [:map
+          [{xt$sq_0 true}]
+          [:anti-join
+           [{c.1/c_custkey o_custkey}]
            [:semi-join
-            [(= xt$needle xt.values.2/xt$column_1)]
+            [{xt$needle xt.values.2/xt$column_1}]
             [:map
              [{xt$needle (substring c.1/c_phone 1 2)}]
              [:rename
@@ -43,30 +43,30 @@
                {:xt$column_1 "29"}
                {:xt$column_1 "30"}
                {:xt$column_1 "18"}
-               {:xt$column_1 "17"}]]]]]
-          [:project
-           [{o_clerk o.6/o_clerk}
-            {o_comment o.6/o_comment}
-            {o_custkey o.6/o_custkey}
-            {o_orderdate o.6/o_orderdate}
-            {o_orderkey o.6/o_orderkey}
-            {o_orderpriority o.6/o_orderpriority}
-            {o_orderstatus o.6/o_orderstatus}
-            {o_shippriority o.6/o_shippriority}
-            {o_totalprice o.6/o_totalprice}]
-           [:rename
-            o.6
-            [:scan
-             {:table orders}
-             [o_custkey
-              o_shippriority
-              o_orderdate
-              o_orderstatus
-              o_orderkey
-              o_clerk
-              o_orderpriority
-              o_totalprice
-              o_comment]]]]]]
+               {:xt$column_1 "17"}]]]]
+           [:project
+            [{o_clerk o.6/o_clerk}
+             {o_comment o.6/o_comment}
+             {o_custkey o.6/o_custkey}
+             {o_orderdate o.6/o_orderdate}
+             {o_orderkey o.6/o_orderkey}
+             {o_orderpriority o.6/o_orderpriority}
+             {o_orderstatus o.6/o_orderstatus}
+             {o_shippriority o.6/o_shippriority}
+             {o_totalprice o.6/o_totalprice}]
+            [:rename
+             o.6
+             [:scan
+              {:table orders}
+              [o_custkey
+               o_shippriority
+               o_orderdate
+               o_orderstatus
+               o_orderkey
+               o_clerk
+               o_orderpriority
+               o_totalprice
+               o_comment]]]]]]]
         [:project
          [{xt$sq_1 xt$avg_out_5}]
          [:group-by
@@ -74,7 +74,7 @@
           [:map
            [{xt$sq_0 true}]
            [:semi-join
-            [(= xt$needle xt.values.4/xt$column_1)]
+            [{xt$needle xt.values.4/xt$column_1}]
             [:map
              [{xt$needle (substring c.3/c_phone 1 2)}]
              [:rename

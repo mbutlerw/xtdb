@@ -3,8 +3,8 @@
  [:map
   [{xt$sq_0 true}]
   [:semi-join
-   [(= xt$needle xt.values.2/xt$column_1)]
-   [:map [{xt$needle x.1/z}] [:rename x.1 [:scan {:table x} [y z]]]]
+   [{x.1/z xt.values.2/xt$column_1}]
+   [:rename x.1 [:scan {:table x} [y z]]]
    [:rename
     xt.values.2
     [:table [xt$column_1] [{:xt$column_1 1} {:xt$column_1 2}]]]]]]

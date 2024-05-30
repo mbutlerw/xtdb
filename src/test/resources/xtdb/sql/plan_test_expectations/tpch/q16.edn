@@ -20,29 +20,33 @@
      {xt$count_distinct_out_5 (count_distinct ps.1/ps_suppkey)}]
     [:map
      [{xt$sq_1 true}]
-     [:anti-join
-      [(= xt$needle s_suppkey)]
-      [:map
-       [{xt$needle ps.1/ps_suppkey}]
-       [:map
-        [{xt$sq_0 true}]
+     [:map
+      [{xt$sq_0 true}]
+      [:mega-join
+       [{ps.1/ps_partkey p.2/p_partkey}]
+       [[:anti-join
+         [{ps.1/ps_suppkey s_suppkey}]
+         [:rename
+          ps.1
+          [:scan {:table partsupp} [ps_partkey ps_suppkey]]]
+         [:project
+          [{s_suppkey s.4/s_suppkey}]
+          [:rename
+           s.4
+           [:scan
+            {:table supplier}
+            [{s_comment (like s_comment "%Customer%Complaints%")}
+             s_suppkey]]]]]
         [:semi-join
-         [(= xt$needle xt.values.3/xt$column_1)]
-         [:map
-          [{xt$needle p.2/p_size}]
-          [:mega-join
-           [{ps.1/ps_partkey p.2/p_partkey}]
-           [[:rename
-             ps.1
-             [:scan {:table partsupp} [ps_partkey ps_suppkey]]]
-            [:rename
-             p.2
-             [:scan
-              {:table part}
-              [p_partkey
-               {p_type (not (like p_type "MEDIUM POLISHED%"))}
-               {p_brand (<> p_brand "Brand#45")}
-               p_size]]]]]]
+         [{p.2/p_size xt.values.3/xt$column_1}]
+         [:rename
+          p.2
+          [:scan
+           {:table part}
+           [p_partkey
+            {p_type (not (like p_type "MEDIUM POLISHED%"))}
+            {p_brand (<> p_brand "Brand#45")}
+            p_size]]]
          [:rename
           xt.values.3
           [:table
@@ -54,12 +58,4 @@
             {:xt$column_1 19}
             {:xt$column_1 3}
             {:xt$column_1 36}
-            {:xt$column_1 9}]]]]]]
-      [:project
-       [{s_suppkey s.4/s_suppkey}]
-       [:rename
-        s.4
-        [:scan
-         {:table supplier}
-         [{s_comment (like s_comment "%Customer%Complaints%")}
-          s_suppkey]]]]]]]]]]
+            {:xt$column_1 9}]]]]]]]]]]]]

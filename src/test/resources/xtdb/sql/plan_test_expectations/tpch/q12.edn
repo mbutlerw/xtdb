@@ -27,37 +27,35 @@
         0)}]
      [:map
       [{xt$sq_0 true}]
-      [:semi-join
-       [(= xt$needle xt.values.3/xt$column_1)]
-       [:map
-        [{xt$needle l.2/l_shipmode}]
-        [:mega-join
-         [{o.1/o_orderkey l.2/l_orderkey}]
-         [[:rename
-           o.1
-           [:scan {:table orders} [o_orderkey o_orderpriority]]]
-          [:rename
-           l.2
-           [:select
-            (and
-             (< l_commitdate l_receiptdate)
-             (< l_shipdate l_commitdate))
-            [:scan
-             {:table lineitem}
-             [l_shipdate
-              {l_receiptdate
-               (and
-                (<
-                 l_receiptdate
-                 (+
-                  #time/date "1994-01-01"
-                  (single-field-interval "1" "YEAR" 2 6)))
-                (>= l_receiptdate #time/date "1994-01-01"))}
-              l_orderkey
-              l_commitdate
-              l_shipmode]]]]]]]
-       [:rename
-        xt.values.3
-        [:table
-         [xt$column_1]
-         [{:xt$column_1 "MAIL"} {:xt$column_1 "SHIP"}]]]]]]]]]]
+      [:mega-join
+       [{o.1/o_orderkey l.2/l_orderkey}]
+       [[:rename
+         o.1
+         [:scan {:table orders} [o_orderkey o_orderpriority]]]
+        [:semi-join
+         [{l.2/l_shipmode xt.values.3/xt$column_1}]
+         [:rename
+          l.2
+          [:select
+           (and
+            (< l_commitdate l_receiptdate)
+            (< l_shipdate l_commitdate))
+           [:scan
+            {:table lineitem}
+            [l_shipdate
+             {l_receiptdate
+              (and
+               (<
+                l_receiptdate
+                (+
+                 #time/date "1994-01-01"
+                 (single-field-interval "1" "YEAR" 2 6)))
+               (>= l_receiptdate #time/date "1994-01-01"))}
+             l_orderkey
+             l_commitdate
+             l_shipmode]]]]
+         [:rename
+          xt.values.3
+          [:table
+           [xt$column_1]
+           [{:xt$column_1 "MAIL"} {:xt$column_1 "SHIP"}]]]]]]]]]]]]

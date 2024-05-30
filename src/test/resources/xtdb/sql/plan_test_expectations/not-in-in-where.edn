@@ -3,6 +3,6 @@
  [:map
   [{xt$sq_0 true}]
   [:anti-join
-   [(= xt$needle z)]
-   [:map [{xt$needle x.1/z}] [:rename x.1 [:scan {:table x} [y z]]]]
+   [{x.1/z z}]
+   [:rename x.1 [:scan {:table x} [y z]]]
    [:project [{z y.2/z}] [:rename y.2 [:scan {:table y} [z]]]]]]]

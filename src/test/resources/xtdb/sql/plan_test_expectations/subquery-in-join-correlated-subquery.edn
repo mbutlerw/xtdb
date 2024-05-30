@@ -7,10 +7,8 @@
     xt$sq_0
     [:apply
      {:mark-join {xt$sq_0 (= ?xt$needle b)}}
-     {bar.2/b ?xt$sq_b_3, xt$needle ?xt$needle}
-     [:map
-      [{xt$needle bar.2/c}]
-      [:rename bar.2 [:scan {:table bar} [b c]]]]
+     {bar.2/b ?xt$sq_b_3, bar.2/c ?xt$needle}
+     [:rename bar.2 [:scan {:table bar} [b c]]]
      [:project
       [{b foo.3/b}]
       [:rename
