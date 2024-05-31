@@ -472,7 +472,6 @@
 
   (sort-by val (update-vals (group-by #(subs % 0 20) (map key @error-counts-by-message)) count))
 
-
   (time (-main  "--verify" "--db" "xtdb" "src/test/resources/xtdb/sql/logic_test/sqlite_test/random/groupby/slt_good_1.test"))
 
   (time (-main "--verify" "--db" "sqlite" "src/test/resources/xtdb/sql/logic_test/sqlite_test/select4.test"))

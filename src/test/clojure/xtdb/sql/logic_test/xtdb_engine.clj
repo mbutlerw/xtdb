@@ -41,20 +41,27 @@
   (scan/tables-with-cols (util/component node :xtdb/indexer)
                          (util/component node ::scan/scan-emitter)))
 
-(defn- execute-sql-query [node sql-statement variables opts]
-  (let [res (xt/q node sql-statement
-                  (-> opts
-                      (assoc :key-fn :snake-case-string)
-                      (assoc :default-all-valid-time? (not= (get variables "VALID_TIME_DEFAULTS") "AS_OF_NOW"))
-                      (cond-> (get variables "CURRENT_TIMESTAMP") (assoc-in [:basis :current-time] (Instant/parse (get variables "CURRENT_TIMESTAMP"))))))
+(defn- execute-sql-query [node sql-statement variables {:keys [direct-sql] :as opts}]
+  (let [plan-stmt plan/plan-statement]
+    ;; we remove xt$id from non-direct SLT queries because `SELECT *` doesn't expect it to be there
+    (with-redefs [plan/plan-statement (fn self
+                                        ([sql] (self sql {}))
+                                        ([sql opts]
+                                         (plan-stmt sql (cond-> opts
+                                                          (not direct-sql) (update :table-info update-vals #(disj % "xt$id"))))))]
+      (let [res (xt/q node sql-statement
+                      (-> opts
+                          (assoc :key-fn :snake-case-string)
+                          (assoc :default-all-valid-time? (not= (get variables "VALID_TIME_DEFAULTS") "AS_OF_NOW"))
+                          (cond-> (get variables "CURRENT_TIMESTAMP") (assoc-in [:basis :current-time] (Instant/parse (get variables "CURRENT_TIMESTAMP"))))))
 
-        ;; we grab the projection afterwards so that xt/q has awaited the tx
-        ;; TODO hoping that there'll be a better means of getting hold of this soon
-        projection (->> (:col-syms (plan/plan-statement sql-statement {:table-info (node->table-info node)}))
-                        (mapv str))]
-    (vec
-     (for [row res]
-       (mapv row projection)))))
+            ;; we grab the projection afterwards so that xt/q has awaited the tx
+            ;; TODO hoping that there'll be a better means of getting hold of this soon
+            projection (->> (:col-syms (plan/plan-statement sql-statement {:table-info (node->table-info node)}))
+                            (mapv str))]
+        (vec
+         (for [row res]
+           (mapv row projection)))))))
 
 (defn parse-create-table [^String x]
   (when-let [[_ table-name columns] (re-find #"(?is)^\s*CREATE\s+TABLE\s+(\w+)\s*\((.+)\)\s*$" x)]
@@ -135,10 +142,10 @@
       (str/starts-with? statement "CREATE TABLE") (execute-record node (parse-create-table statement))
       (str/starts-with? statement "CREATE VIEW") (execute-record node (parse-create-view statement))
 
-      (:direct-sql slt/*opts*) (execute-sql-statement node statement variables (select-keys slt/*opts* [:decorrelate?]))
+      (:direct-sql slt/*opts*) (execute-sql-statement node statement variables (select-keys slt/*opts* [:decorrelate? :direct-sql]))
 
       :else (-> (plan/parse-statement statement)
                 (.accept (->SltStmtVisitor node statement)))))
 
   (execute-query [this query variables]
-    (execute-sql-query this query variables (select-keys slt/*opts* [:decorrelate?]))))
+    (execute-sql-query this query variables (select-keys slt/*opts* [:decorrelate? :direct-sql]))))
