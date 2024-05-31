@@ -1535,3 +1535,10 @@
     (t/is (= [{:x 1}]
              (xt/q tu/*node* "SELECT x FROM foo3 INTERSECT SELECT y FROM bar3")))))
 
+(deftest test-count-star-rule-9
+  (t/testing "count-star should be rewritten to count(dep-col) where dep col is a projected inner col of value 1")
+    (xt/execute-tx tu/*node* [[:put-docs :t1 {:xt/id 1 :x 1}]
+                              [:put-docs :t2 {:xt/id 2 :y 2}]])
+
+    (t/is (= [{:t1-count 10, :y 2}]
+             (xt/q tu/*node* "SELECT (SELECT (10 + count(*) + count(*)) FROM t1 WHERE x = y ) AS t1_count, y FROM t2"))))
