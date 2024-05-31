@@ -4,10 +4,10 @@
   []
   [[:rename foo.1 [:scan {:table foo} [a]]]
    [:select
-    (= bar.2/c xt$sq_0)
+    (= bar.2/c xt$sq_3)
     [:single-join
      []
      [:rename bar.2 [:scan {:table bar} [c]]]
      [:project
-      [{xt$sq_0 foo.3/b}]
-      [:rename foo.3 [:scan {:table foo} [b]]]]]]]]]
+      [{xt$sq_3 foo.4/b}]
+      [:rename foo.4 [:scan {:table foo} [b]]]]]]]]]

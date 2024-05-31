@@ -1,14 +1,14 @@
 [:project
  [{custkey c.1/custkey}]
  [:map
-  [{xt$sq_0 xt$sum_out_4}]
+  [{xt$sq_2 xt$sum_out_5}]
   [:select
-   (< 1000000 xt$sum_out_4)
+   (< 1000000 xt$sum_out_5)
    [:group-by
-    [c.1/custkey xt$row_number_0 {xt$sum_out_4 (sum o.2/totalprice)}]
+    [c.1/custkey xt$row_number_0 {xt$sum_out_5 (sum o.3/totalprice)}]
     [:left-outer-join
-     [{c.1/custkey o.2/custkey}]
+     [{c.1/custkey o.3/custkey}]
      [:map
       [{xt$row_number_0 (row-number)}]
       [:rename c.1 [:scan {:table customer} [custkey]]]]
-     [:rename o.2 [:scan {:table orders} [custkey totalprice]]]]]]]]
+     [:rename o.3 [:scan {:table orders} [custkey totalprice]]]]]]]]

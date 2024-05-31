@@ -1,26 +1,26 @@
 [:project
- [{name customers.1/name} {xt$column_2 xt$sq_0}]
+ [{name customers.1/name} {xt$column_2 xt$sq_4}]
  [:map
-  [{xt$sq_0 xt$row_count_5}]
+  [{xt$sq_4 xt$row_count_7}]
   [:group-by
    [customers.1/name
     customers.1/custno
     customers.1/country
-    xt$sq_0
+    xt$sq_2
     xt$row_number_0
-    {xt$row_count_5 (row-count)}]
+    {xt$row_count_7 (row-count)}]
    [:left-outer-join
-    [{customers.1/custno orders.3/custno}]
+    [{customers.1/custno orders.5/custno}]
     [:map
      [{xt$row_number_0 (row-number)}]
      [:map
-      [{xt$sq_0 true}]
+      [{xt$sq_2 true}]
       [:semi-join
        [{customers.1/country country}]
        [:rename
         customers.1
         [:scan {:table customers} [name custno country]]]
        [:project
-        [{country salesp.2/country}]
-        [:rename salesp.2 [:scan {:table salesp} [country]]]]]]]
-    [:rename orders.3 [:scan {:table orders} [custno]]]]]]]
+        [{country salesp.3/country}]
+        [:rename salesp.3 [:scan {:table salesp} [country]]]]]]]
+    [:rename orders.5 [:scan {:table orders} [custno]]]]]]]

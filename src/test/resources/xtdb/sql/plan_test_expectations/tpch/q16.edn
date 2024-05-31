@@ -12,16 +12,16 @@
    [p.2/p_brand
     p.2/p_type
     p.2/p_size
-    {supplier_cnt xt$count_distinct_out_5}]
+    {supplier_cnt xt$count_distinct_out_7}]
    [:group-by
     [p.2/p_brand
      p.2/p_type
      p.2/p_size
-     {xt$count_distinct_out_5 (count_distinct ps.1/ps_suppkey)}]
+     {xt$count_distinct_out_7 (count_distinct ps.1/ps_suppkey)}]
     [:map
-     [{xt$sq_1 true}]
+     [{xt$sq_3 true}]
      [:map
-      [{xt$sq_0 true}]
+      [{xt$sq_5 true}]
       [:mega-join
        [{ps.1/ps_partkey p.2/p_partkey}]
        [[:anti-join
@@ -30,15 +30,15 @@
           ps.1
           [:scan {:table partsupp} [ps_partkey ps_suppkey]]]
          [:project
-          [{s_suppkey s.4/s_suppkey}]
+          [{s_suppkey s.6/s_suppkey}]
           [:rename
-           s.4
+           s.6
            [:scan
             {:table supplier}
             [{s_comment (like s_comment "%Customer%Complaints%")}
              s_suppkey]]]]]
         [:semi-join
-         [{p.2/p_size xt.values.3/xt$column_1}]
+         [{p.2/p_size xt.values.4/xt$column_1}]
          [:rename
           p.2
           [:scan
@@ -48,7 +48,7 @@
             {p_brand (<> p_brand "Brand#45")}
             p_size]]]
          [:rename
-          xt.values.3
+          xt.values.4
           [:table
            [xt$column_1]
            [{:xt$column_1 49}

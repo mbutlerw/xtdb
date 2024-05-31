@@ -1,11 +1,11 @@
 [:project
- [{avg_yearly (/ xt$sum_out_6 7.0)}]
+ [{avg_yearly (/ xt$sum_out_7 7.0)}]
  [:group-by
-  [{xt$sum_out_6 (sum l.1/l_extendedprice)}]
+  [{xt$sum_out_7 (sum l.1/l_extendedprice)}]
   [:select
-   (< l.1/l_quantity xt$sq_0)
+   (< l.1/l_quantity xt$sq_3)
    [:map
-    [{xt$sq_0 (* 0.2 xt$avg_out_5)}]
+    [{xt$sq_3 (* 0.2 xt$avg_out_6)}]
     [:group-by
      [l.1/l_partkey
       l.1/l_quantity
@@ -14,9 +14,9 @@
       p.2/p_brand
       p.2/p_container
       xt$row_number_0
-      {xt$avg_out_5 (avg l.3/l_quantity)}]
+      {xt$avg_out_6 (avg l.4/l_quantity)}]
      [:left-outer-join
-      [{p.2/p_partkey l.3/l_partkey}]
+      [{p.2/p_partkey l.4/l_partkey}]
       [:map
        [{xt$row_number_0 (row-number)}]
        [:mega-join
@@ -34,5 +34,5 @@
             {p_brand (= p_brand "Brand#23")}
             {p_container (= p_container "MED BOX")}]]]]]]
       [:rename
-       l.3
+       l.4
        [:scan {:table lineitem} [l_partkey l_quantity]]]]]]]]]

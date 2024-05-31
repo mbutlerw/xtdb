@@ -3,17 +3,17 @@
  [:order-by
   [[value {:direction :desc, :null-ordering :nulls-first}]]
   [:project
-   [ps.1/ps_partkey {value xt$sum_out_11}]
+   [ps.1/ps_partkey {value xt$sum_out_12}]
    [:select
-    (> xt$sum_out_4 xt$sq_0)
+    (> xt$sum_out_4 xt$sq_6)
     [:single-join
      []
      [:group-by
       [ps.1/ps_partkey
-       {xt$sum_out_11 (sum xt$sum_in_12)}
+       {xt$sum_out_12 (sum xt$sum_in_13)}
        {xt$sum_out_4 (sum xt$sum_in_5)}]
       [:map
-       [{xt$sum_in_12 (* ps.1/ps_supplycost ps.1/ps_availqty)}
+       [{xt$sum_in_13 (* ps.1/ps_supplycost ps.1/ps_availqty)}
         {xt$sum_in_5 (* ps.1/ps_supplycost ps.1/ps_availqty)}]
        [:mega-join
         [{s.2/s_nationkey n.3/n_nationkey}
@@ -32,24 +32,24 @@
           s.2
           [:scan {:table supplier} [s_nationkey s_suppkey]]]]]]]
      [:project
-      [{xt$sq_0 (* xt$sum_out_9 1.0E-4)}]
+      [{xt$sq_6 (* xt$sum_out_10 1.0E-4)}]
       [:group-by
-       [{xt$sum_out_9 (sum xt$sum_in_10)}]
+       [{xt$sum_out_10 (sum xt$sum_in_11)}]
        [:map
-        [{xt$sum_in_10 (* ps.6/ps_supplycost ps.6/ps_availqty)}]
+        [{xt$sum_in_11 (* ps.7/ps_supplycost ps.7/ps_availqty)}]
         [:mega-join
-         [{s.7/s_nationkey n.8/n_nationkey}
-          {ps.6/ps_suppkey s.7/s_suppkey}]
+         [{s.8/s_nationkey n.9/n_nationkey}
+          {ps.7/ps_suppkey s.8/s_suppkey}]
          [[:rename
-           n.8
+           n.9
            [:scan
             {:table nation}
             [n_nationkey {n_name (= n_name "GERMANY")}]]]
           [:rename
-           ps.6
+           ps.7
            [:scan
             {:table partsupp}
             [ps_availqty ps_suppkey ps_supplycost]]]
           [:rename
-           s.7
+           s.8
            [:scan {:table supplier} [s_nationkey s_suppkey]]]]]]]]]]]]]

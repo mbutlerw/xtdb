@@ -13,7 +13,7 @@
     s.4/s_phone
     revenue.5/total_revenue]
    [:select
-    (= revenue.5/total_revenue xt$sq_0)
+    (= revenue.5/total_revenue xt$sq_6)
     [:single-join
      []
      [:mega-join
@@ -45,11 +45,11 @@
               l_suppkey
               l_extendedprice]]]]]]]]]
      [:project
-      [{xt$sq_0 xt$max_out_7}]
+      [{xt$sq_6 xt$max_out_8}]
       [:group-by
-       [{xt$max_out_7 (max revenue.6/total_revenue)}]
+       [{xt$max_out_8 (max revenue.7/total_revenue)}]
        [:rename
-        revenue.6
+        revenue.7
         [:project
          [{supplier_no l.1/l_suppkey} {total_revenue xt$sum_out_2}]
          [:group-by

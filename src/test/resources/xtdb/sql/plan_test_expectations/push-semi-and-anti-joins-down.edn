@@ -1,18 +1,18 @@
 [:project
  [{foo x.1/foo}]
  [:select
-  xt$sq_0
+  xt$sq_3
   [:apply
-   {:mark-join {xt$sq_0 true}}
-   {y.2/biz ?xt$sq_biz_4, x.1/foo ?xt$sq_foo_3}
+   {:mark-join {xt$sq_3 true}}
+   {y.2/biz ?xt$sq_biz_5, x.1/foo ?xt$sq_foo_4}
    [:mega-join
     []
     [[:rename x.1 [:scan {:table x} [foo]]]
      [:rename y.2 [:scan {:table y} [biz]]]]]
    [:project
-    [{bar z.3/bar}]
+    [{bar z.4/bar}]
     [:rename
-     z.3
+     z.4
      [:scan
       {:table z}
-      [{baz (= baz ?xt$sq_biz_4)} {bar (= bar ?xt$sq_foo_3)}]]]]]]]
+      [{baz (= baz ?xt$sq_biz_5)} {bar (= bar ?xt$sq_foo_4)}]]]]]]]

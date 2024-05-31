@@ -4,13 +4,13 @@
   []
   [[:rename foo.1 [:scan {:table foo} [a]]]
    [:select
-    xt$sq_0
+    xt$sq_3
     [:apply
-     {:mark-join {xt$sq_0 (= ?xt$needle b)}}
-     {bar.2/b ?xt$sq_b_3, bar.2/c ?xt$needle}
+     {:mark-join {xt$sq_3 (= ?xt$needle b)}}
+     {bar.2/b ?xt$sq_b_4, bar.2/c ?xt$needle}
      [:rename bar.2 [:scan {:table bar} [b c]]]
      [:project
-      [{b foo.3/b}]
+      [{b foo.4/b}]
       [:rename
-       foo.3
-       [:scan {:table foo} [b {a (= a ?xt$sq_b_3)}]]]]]]]]]
+       foo.4
+       [:scan {:table foo} [b {a (= a ?xt$sq_b_4)}]]]]]]]]]

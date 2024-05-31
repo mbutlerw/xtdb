@@ -116,11 +116,11 @@
     (not-empty (->> (find-decls scope chain)
                     (mapv #(->sq-sym % env !sq-refs))))))
 
-(defn- plan-sq [^ParserRuleContext sq-ctx, env, scope, ^Map !subqs, sq-opts]
+(defn- plan-sq [^ParserRuleContext sq-ctx, {:keys [!id-count] :as env}, scope, ^Map !subqs, sq-opts]
   (if-not !subqs
     (add-err! env (->SubqueryDisallowed))
 
-    (let [sq-sym (-> (->col-sym (str "xt$sq_" (count !subqs)))
+    (let [sq-sym (-> (->col-sym (str "xt$sq_" (swap! !id-count inc)))
                      (vary-meta assoc :sq-out-sym? true))
           !sq-refs (HashMap.)
           query-plan (-> sq-ctx (.accept (->QueryPlanVisitor env (->SubqueryScope env scope !sq-refs))))]

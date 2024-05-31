@@ -24,9 +24,9 @@
      s.2/s_phone
      s.2/s_comment]
     [:map
-     [{xt$sq_0 xt$min_out_11}]
+     [{xt$sq_6 xt$min_out_12}]
      [:select
-      (= ps.3/ps_supplycost xt$min_out_11)
+      (= ps.3/ps_supplycost xt$min_out_12)
       [:group-by
        [p.1/p_partkey
         p.1/p_type
@@ -48,9 +48,9 @@
         r.5/r_name
         r.5/r_regionkey
         xt$row_number_0
-        {xt$min_out_11 (min ps.6/ps_supplycost)}]
+        {xt$min_out_12 (min ps.7/ps_supplycost)}]
        [:left-outer-join
-        [{p.1/p_partkey ps.6/ps_partkey}]
+        [{p.1/p_partkey ps.7/ps_partkey}]
         [:map
          [{xt$row_number_0 (row-number)}]
          [:mega-join
@@ -91,22 +91,22 @@
               s_comment
               s_suppkey]]]]]]
         [:mega-join
-         [{n.8/n_regionkey r.9/r_regionkey}
-          {s.7/s_nationkey n.8/n_nationkey}
-          {ps.6/ps_suppkey s.7/s_suppkey}]
+         [{n.9/n_regionkey r.10/r_regionkey}
+          {s.8/s_nationkey n.9/n_nationkey}
+          {ps.7/ps_suppkey s.8/s_suppkey}]
          [[:rename
-           r.9
+           r.10
            [:scan
             {:table region}
             [{r_name (= r_name "EUROPE")} r_regionkey]]]
           [:rename
-           n.8
+           n.9
            [:scan {:table nation} [n_nationkey n_regionkey]]]
           [:rename
-           ps.6
+           ps.7
            [:scan
             {:table partsupp}
             [ps_partkey ps_suppkey ps_supplycost]]]
           [:rename
-           s.7
+           s.8
            [:scan {:table supplier} [s_nationkey s_suppkey]]]]]]]]]]]]]

@@ -1,6 +1,6 @@
 [:project
- [{xt$column_1 xt$sq_0}]
+ [{xt$column_1 xt$sq_2}]
  [:mark-join
-  {xt$sq_0 [(> x.1/z z)]}
+  {xt$sq_2 [(> x.1/z z)]}
   [:rename x.1 [:scan {:table x} [z]]]
-  [:project [{z y.2/z}] [:rename y.2 [:scan {:table y} [z]]]]]]
+  [:project [{z y.3/z}] [:rename y.3 [:scan {:table y} [z]]]]]]
