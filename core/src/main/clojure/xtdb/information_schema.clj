@@ -1,6 +1,7 @@
 (ns xtdb.information-schema
   (:require xtdb.metadata
             [xtdb.types :as types]
+            [xtdb.pgwire :as pgwire]
             [xtdb.util :as util]
             [xtdb.vector.reader :as vr]
             [xtdb.vector.writer :as vw])
@@ -46,6 +47,22 @@
                           "tablename" (types/col-type->field "tablename" :utf8)
                           "tableowner" (types/col-type->field "tableowner" :utf8)
                           "tablespace" (types/col-type->field "tablespace" :null)}
+   'pg_catalog/pg_type {"oid" (types/col-type->field "oid" :i32)
+                        "typname" (types/col-type->field "typname" :utf8)
+                        "typnamespace" (types/col-type->field "typnamespace" :i32)
+                        "typowner" (types/col-type->field "typowner" :i32)
+                        "typtype" (types/col-type->field "typtype" :utf8)
+                        "typbasetype" (types/col-type->field "typbasetype" :i32)
+                        "typnotnull" (types/col-type->field "typnotnull" :bool)
+                        "typtypmod" (types/col-type->field "typtypmod" :i32)}
+   'pg_catalog/pg_class {"oid" (types/col-type->field "oid" :i32)
+                         "relname" (types/col-type->field "relname" :utf8)
+                         "relnamespace" (types/col-type->field "relnamespace" :i32)
+                         "relkind" (types/col-type->field "relkind" :utf8)}
+   'pg_catalog/pg_description {"objoid" (types/col-type->field "objoid" :i32)
+                               "classoid" (types/col-type->field "classoid" :i32)
+                               "objsubid" (types/col-type->field "objsubid" :i16)
+                               "description"(types/col-type->field "description" :utf8)}
    'pg_catalog/pg_views {"schemaname" (types/col-type->field "schemaname" :utf8)
                          "viewname" (types/col-type->field "viewname" :utf8)
                          "viewowner" (types/col-type->field "viewowner" :utf8)}
@@ -109,6 +126,46 @@
         "tablename" (.writeObject col-wtr table)
         "tableowner" (.writeObject col-wtr "xtdb")
         "tablespace" (.writeObject col-wtr nil)))
+    (.endRow rel-wtr))
+  (.syncRowCount rel-wtr)
+  rel-wtr)
+
+(defn pg-class [^IRelationWriter rel-wtr schema-info]
+  (doseq [table (keys schema-info)]
+    (.startRow rel-wtr)
+    (doseq [[col ^IVectorWriter col-wtr] rel-wtr]
+      (case col
+        "oid" (.writeInt col-wtr (hash table))
+        "relname" (.writeObject col-wtr table)
+        "relnamespace" (.writeObject col-wtr (hash "public"))
+        "relkind" (.writeObject col-wtr "r")))
+    (.endRow rel-wtr))
+  (.syncRowCount rel-wtr)
+  rel-wtr)
+
+#_(defn pg-description [^IRelationWriter rel-wtr schema-info]
+  (doseq [table (keys schema-info)]
+    (.startRow rel-wtr)
+    (doseq [[col ^IVectorWriter col-wtr] rel-wtr]
+      (case col
+        "objoid" (.writeInt col-wtr (hash table))
+        "relname" (.writeInt col-wtr (hash table))
+        "relnamespace" (.writeObject col-wtr (hash "xtdb"))
+        "relkind" (.writeObject col-wtr "r")))
+    (.endRow rel-wtr))
+  (.syncRowCount rel-wtr)
+  rel-wtr)
+
+(defn pg-type [^IRelationWriter rel-wtr col-rows]
+  (doseq [{:keys [idx table name _type]} col-rows]
+    (.startRow rel-wtr)
+    (doseq [[col ^IVectorWriter col-wtr] rel-wtr]
+      (case col
+        "attrelid" (.writeInt col-wtr (hash table))
+        "attname" (.writeObject col-wtr name)
+        "atttypid" (.writeInt col-wtr 114) ;; = json - avoiding circular dep on pgwire.clj
+        "attlen" (.writeShort col-wtr -1)
+        "attnum" (.writeShort col-wtr idx)))
     (.endRow rel-wtr))
   (.syncRowCount rel-wtr)
   rel-wtr)
@@ -195,6 +252,8 @@
                                      information_schema/columns (columns out-rel-wtr (schema-info->col-rows schema-info))
                                      information_schema/schemata (schemata out-rel-wtr)
                                      pg_catalog/pg_tables (pg-tables out-rel-wtr schema-info)
+                                     pg_catalog/pg_class (pg-class out-rel-wtr schema-info)
+                                     pg_catalog/pg_description out-rel-wtr
                                      pg_catalog/pg_views out-rel-wtr
                                      pg_catalog/pg_matviews out-rel-wtr
                                      pg_catalog/pg_attribute (pg-attribute out-rel-wtr (schema-info->col-rows schema-info))

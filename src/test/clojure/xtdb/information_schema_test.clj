@@ -115,6 +115,33 @@
                                [schemaname tablename tableowner tablespace]]
                              {:node tu/*node*})))))
 
+(deftest test-pg-class
+  (xt/submit-tx tu/*node* test-data)
+
+  (t/is (= #{{:relkind "r",
+              :relnamespace 1376455703,
+              :oid 499408916,
+              :relname "beanie"}
+             {:relkind "r",
+              :relnamespace 1376455703,
+              :oid 159967295,
+              :relname "baseball"}
+             {:relkind "r",
+              :relnamespace 1376455703,
+              :oid 93927094,
+              :relname "xt$txs"}}
+           (set (tu/query-ra '[:scan
+                               {:table pg_catalog/pg_class}
+                               [oid relname relnamespace relkind]]
+                             {:node tu/*node*})))))
+
+(deftest test-pg-description
+  (t/is (= []
+           (tu/query-ra '[:scan
+                          {:table pg_catalog/pg_desciption}
+                          [objoid classoid objsubid description]]
+                        {:node tu/*node*}))))
+
 (deftest test-pg-views
   (t/is (= []
            (tu/query-ra '[:scan

@@ -1247,11 +1247,17 @@
 
 (deftest test-column-order
   (with-open [conn (jdbc-conn)]
+    (clojure.pprint/pprint (.getString (.next (.getSchemas (.getMetaData conn))) "TABLE_SCHEM"))
+    #_(let [x (result-set/as-maps (.getSchemas (.getMetaData conn)) {})]
+      (clojure.pprint/pprint x)
+      (clojure.pprint/pprint  (result-set/as-maps (:rs x )))
+      #_(clojure.pprint/pprint  (result-set/as-maps (:rsmeta x )
+                                                  {})))
     (let [sql #(q-seq conn [%])]
       (q conn ["INSERT INTO foo(xt$id, col0, col1) VALUES (1, 10, 'a'), (2, 20, 'b'), (3, 30, 'c')"])
 
       (is (= [[20 "b" 2] [10 "a" 1] [30 "c" 3]]
-             (sql "SELECT foo.col0, foo.col1, foo.xt$id FROM foo")))
+             (sql "SELECT col0, col1, xt$id FROM foo")))
 
       (is (= [[2 20 "b"] [1 10 "a"] [3 30 "c"]]
              (sql "SELECT * FROM foo"))))))

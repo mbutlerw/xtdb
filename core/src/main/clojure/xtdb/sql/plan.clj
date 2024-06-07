@@ -853,7 +853,9 @@
        :fractional-precision (or fp 6)})))
 
 (defn- trim-quotes-from-string [string]
-  (subs string 1 (dec (count string))))
+  (if (str/starts-with? string "E'")
+    (subs string 2 (dec (count string)))
+    (subs string 1 (dec (count string)))))
 
 (defrecord CastArgsVisitor [env]
   SqlVisitor
@@ -912,7 +914,10 @@
       {:cast-type :interval
        :cast-opts (when interval-qualifier (iq-context->iq-map interval-qualifier))}))
 
-  (visitCharacterStringType [_ _] {:cast-type :utf8}))
+  (visitCharacterStringType [_ _] {:cast-type :utf8})
+  (visitOidAliasType [_ ctx]
+    {:->cast-fn (fn [ve]
+                  1259)}))
 
 (defn handle-cast-expr [ve {:keys [cast-type cast-opts ->cast-fn]}] 
   (if ->cast-fn
@@ -1147,6 +1152,9 @@
           (-> (.expr ctx 0) (.accept this))
           (-> (.expr ctx 1) (.accept this))))
 
+  (visitBitwiseAndExpr [this ctx]
+    (-> (.expr ctx 0) (.accept this))) ;;TODO
+
   (visitUnaryNotExpr [this ctx] (list 'not (-> (.expr ctx) (.accept this))))
 
   (visitComparisonPredicate [this ctx]
@@ -1300,6 +1308,7 @@
 
   (visitHasTablePrivilegePredicate [_ _] true)
   (visitHasSchemaPrivilegePredicate [_ _] true)
+  (visitHasAnyColumnPrivilegePredicate [_ _] true)
 
   (visitCurrentDateFunction [_ _] '(current-date))
   (visitCurrentTimeFunction [_ ctx] (fn-with-precision 'current-time (.precision ctx)))
@@ -1349,6 +1358,21 @@
         (list 'substring cve sp sl)
         (list 'substring cve sp))))
 
+  (visitStringReplaceFunction [this ctx]
+    "pg_catalog")
+
+  (visitWindowFunctionExpr [this ctx]
+    nil)
+
+  (visitPgGetExprFunction [this ctx]
+    nil)
+
+  (visitInformationSchemaPgExpandArray [this ctx]
+    nil)
+
+  (visitPgGetIndexDefFunction [this ctx]
+    nil)
+
   (visitLowerFunction [this ctx] (list 'lower (-> (.expr ctx) (.accept this))))
   (visitUpperFunction [this ctx] (list 'upper (-> (.expr ctx) (.accept this))))
 
@@ -1372,6 +1396,11 @@
 
   (visitCurrentUserFunction [_ _] '(current-user))
   (visitCurrentSchemaFunction [_ _] '(current-schema))
+  (visitCurrentSchemasFunction [_ ctx]
+    (if (= "true" (.getText (.booleanValue ctx)))
+      ["pg_catalog", "public"]
+      ["public"]))
+
   (visitCurrentDatabaseFunction [_ _] '(current-database))
 
   (visitSimpleCaseExpr [this ctx]

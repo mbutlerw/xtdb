@@ -82,8 +82,10 @@ fragment EXPONENT : 'E' SIGN? DIGIT+ ;
 UNSIGNED_FLOAT : DIGIT+ ('.' DIGIT+ EXPONENT? | EXPONENT) ;
 UNSIGNED_INTEGER : DIGIT+ ;
 
-CHARACTER_STRING : '\'' ('\'\'' | ~('\''|'\n'))* '\'' ;
-characterString : CHARACTER_STRING ;
+fragment STRING_ESCAPE_CHAR : 'E';
+CHARACTER_STRING : STRING_ESCAPE_CHAR? '\'' ('\'\'' | ~('\''|'\n'))* '\'' ;
+characterString : CHARACTER_STRING;
+
 BINARY_STRING : 'X(\'' HEX_DIGIT* '\')' ;
 
 intervalQualifier : startField 'TO' endField | singleDatetimeField ;
@@ -101,7 +103,12 @@ identifier
     : (REGULAR_IDENTIFIER
         | 'START' | 'END'
         | 'AGE'
-        | setFunctionType )
+        | setFunctionType
+        | 'CARDINALITY'
+        | 'SELECT'
+        | 'DELETE'
+        | 'UPDATE'
+        | 'INSERT')
         # RegularIdentifier
     | DELIMITED_IDENTIFIER # DelimitedIdentifier
     ;
@@ -143,6 +150,7 @@ dataType
     | 'DURATION' ('(' precision ')')? # DurationType
     | 'ROW' '(' fieldDefinition (',' fieldDefinition)* ')' # RowType
     | dataType 'ARRAY' ('[' maximumCardinality ']')? # ArrayType
+    | 'regclass' #OidAliasType
     ;
 
 precision : UNSIGNED_INTEGER ;
@@ -174,6 +182,7 @@ expr
     | 'NOT' expr #UnaryNotExpr
     | expr 'AND' expr #AndExpr
     | expr 'OR' expr #OrExpr
+    | expr '&' expr #BitwiseAndExpr
     | numericExpr #NumericExpr0
     ;
 
@@ -232,6 +241,28 @@ exprPrimary
         privilegeString
       ')' # HasSchemaPrivilegePredicate
 
+    | (schemaName '.')? 'HAS_ANY_COLUMN_PRIVILEGE' '('
+        ( userString ',' )?
+        schemaString ','
+        privilegeString
+      ')' # HasAnyColumnPrivilegePredicate
+
+    | (schemaName '.')? 'pg_get_expr' '('
+        pgNodeTree ','
+        relationOid
+        (',' booleanValue )?
+      ')' # PgGetExprFunction
+
+    | 'information_schema._pg_expandarray' '('
+        expr
+      ')' # InformationSchemaPgExpandArray
+
+    | (schemaName '.')? 'pg_get_indexdef' '('
+        pgNodeTree ','
+        relationOid
+        (',' booleanValue )?
+      ')' # PgGetIndexDefFunction
+
     // numeric value functions
     | 'POSITION' '(' expr 'IN' expr ( 'USING' charLengthUnits )? ')' # PositionFunction
     | 'EXTRACT' '(' extractField 'FROM' extractSource ')' # ExtractFunction
@@ -261,6 +292,12 @@ exprPrimary
         ( 'USING' charLengthUnits )?
       ')' # CharacterSubstringFunction
 
+    | 'REPLACE' '('
+        expr ','
+        expr ','
+        expr
+        ')' # StringReplaceFunction
+
     | 'UPPER' '(' expr ')' # UpperFunction
     | 'LOWER' '(' expr ')' # LowerFunction
     | 'TRIM' '(' trimSpecification? trimCharacter? 'FROM'? trimSource ')' # TrimFunction
@@ -273,9 +310,10 @@ exprPrimary
         ( 'USING' charLengthUnits )?
       ')' # OverlayFunction
 
-    | 'CURRENT_USER' # CurrentUserFunction
-    | 'CURRENT_SCHEMA' # CurrentSchemaFunction
-    | 'CURRENT_DATABASE' # CurrentDatabaseFunction
+    | (schemaName '.')? 'CURRENT_USER' # CurrentUserFunction
+    | (schemaName '.')? 'CURRENT_SCHEMA' # CurrentSchemaFunction
+    | (schemaName '.')? 'CURRENT_SCHEMAS'  '(' booleanValue ')' #CurrentSchemasFunction
+    | (schemaName '.')? 'CURRENT_DATABASE' # CurrentDatabaseFunction
 
     | 'CURRENT_DATE' ( '(' ')' )? # CurrentDateFunction
     | 'CURRENT_TIME' ('(' precision ')')? # CurrentTimeFunction
@@ -658,6 +696,8 @@ userString : expr ;
 tableString : expr ;
 schemaString : expr ;
 privilegeString : expr ;
+pgNodeTree : expr ;
+relationOid : expr ;
 
 //// §10 Additional common elements
 

@@ -472,6 +472,7 @@
   [{:q ";"
     :cols []
     :rows []}
+
    {:q "select pg_catalog.version()"
     :cols [{:column-name "version" :column-oid oid-varchar}]
     :rows [["PostgreSQL 14.2"]]}
@@ -483,6 +484,9 @@
     :cols [{:column-name "transaction_isolation" :column-oid oid-varchar}]
     :rows [["read committed"]]}
 
+   {:q "show timezone"
+    :cols [{:column-name "TimeZone" :column-oid oid-varchar}]
+    :rows [["GMT"]]}
    ;; ODBC issues this query by default, you may be able to disable with an option
    {:q "select oid, typbasetype from pg_type where typname = 'lo'"
     :cols [{:column-name "oid", :column-oid oid-varchar} {:column-name "typebasetype", :column-oid oid-varchar}]
@@ -1301,6 +1305,7 @@
      result-cursor
      (reify Consumer
        (accept [_ rel]
+
          (cond
            (cancelled-by-client?)
            (do (log/trace "Query cancelled by client")
@@ -1320,6 +1325,7 @@
              (dotimes [idx (.rowCount ^RelationReader rel)]
                (let [row (map-indexed
                           (fn [field-idx {:keys [column-name write-binary write-text]}]
+(clojure.pprint/pprint (.getObject (.readerForName ^RelationReader rel column-name) idx))
                             (if (or (= result-format [:binary]) (= (nth result-format field-idx nil) :binary))
                               (write-binary (.readerForName ^RelationReader rel column-name) idx)
                               (if write-text
@@ -1625,6 +1631,8 @@
                         :port (:port server)
                         :cid cid})
 
+  (println "=PG=PARSE+====")
+  (clojure.pprint/pprint query)
   (let [{:keys [err] :as stmt} (interpret-sql query)
         unsupported-arg-types (remove supported-param-oids arg-types)
         stmt (when-not err (assoc stmt :arg-types arg-types))

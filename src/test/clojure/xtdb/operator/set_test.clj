@@ -124,7 +124,10 @@
             #{{:a 100, :b 15}}
             #{{:a 10, :b 15}}]
            (->> (tu/query-ra [:distinct
-                              [::tu/blocks
+                              [:union-all
+                               [:table [{:foo 1}]]
+                               [:table [{}]]]
+                              #_[::tu/blocks
                                [[{:a 12 :b 10}, {:a 0 :b 15}]
                                 [{:a 100 :b 15} {:a 0 :b 15}]
                                 [{:a 100 :b 15}]
