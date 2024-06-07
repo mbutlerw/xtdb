@@ -1452,7 +1452,7 @@
                   (pg-types (col-type->pg-type col-types))))
               (pg-types (col-type->pg-type col-type))))
           {:oid :column-oid})
-         :column-name (key (first field))))
+         :column-name (str (key (first field)))))
 
 (defn- cmd-send-row-description [conn cols]
   (let [defaults {:column-name ""

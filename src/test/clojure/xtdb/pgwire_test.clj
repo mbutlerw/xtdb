@@ -1262,10 +1262,10 @@
 
 (deftest test-postgres-types
   (with-open [conn (jdbc-conn "prepareThreshold" 1 "binaryTransfer" false)]
-    (q-seq conn ["INSERT INTO foo(xt$id, int8, float8, varchar, boolean) VALUES (?, ?, ?, ?, ?)"
+    (q-seq conn ["INSERT INTO foo(xt$id, int8, float8, var_char, bool) VALUES (?, ?, ?, ?, ?)"
                  #uuid "9e8b41a0-723f-4e6b-babb-c4e6afd17ef2" nil 11.2 nil true]))
   (with-open [conn (jdbc-conn "prepareThreshold" 1 "binaryTransfer" true)]
-    (q-seq conn ["INSERT INTO foo(xt$id, int8, float8, varchar, boolean) VALUES (?, ?, ?, ?, ?)"
+    (q-seq conn ["INSERT INTO foo(xt$id, int8, float8, var_char, bool) VALUES (?, ?, ?, ?, ?)"
                  #uuid "7dd2ed62-bb05-43c8-b289-5503d9b19ee6" 2 nil "bb" false])
     ;;binary format is only requested for preparedStatements in pgjdbc
     ;;threshold one should mean we test the text and binary format for each type
@@ -1302,10 +1302,10 @@
 
       (testing "varchar"
         (is (= [["bb"] [nil]]
-               (sql "SELECT foo.varchar FROM foo"))
+               (sql "SELECT foo.var_char FROM foo"))
             "text")
 
       (testing "boolean"
           (is (= [[false] [true]]
-                 (sql "SELECT foo.boolean FROM foo"))
+                 (sql "SELECT foo.bool FROM foo"))
               "text"))))))
