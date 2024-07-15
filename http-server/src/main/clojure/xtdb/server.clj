@@ -23,7 +23,10 @@
             [xtdb.node :as xtn]
             [xtdb.protocols :as xtp]
             [xtdb.serde :as serde]
-            [xtdb.util :as util])
+            [xtdb.util :as util]
+
+            [next.jdbc :as jdbc]
+            )
   (:import (java.io InputStream OutputStream)
            (java.time Duration ZoneId)
            (java.util Map)
@@ -35,6 +38,29 @@
            xtdb.api.module.XtdbModule
            (xtdb.api.query Basis IKeyFn Query QueryRequest SqlQuery XtqlQuery)
            (xtdb.api.tx TxOp TxOptions TxRequest)))
+
+
+(def http-routes
+  [["/account/" {:name :account
+                 :summary "Info on accounts"
+                 :description "info on accounts"}]])
+
+(defn jdbc-conn []
+  (jdbc/get-connection  "jdbc:postgresql://localhost:5433/xtdb"))
+
+(defn ingest-accounts []
+  (jdbc/execute! (jdbc-conn)
+                 ["INSERT into Accounts (_id, DisplayName)
+VALUES (22214, 'Test Account 20'),
+(11413, 'Private Clients Fund TTXX'),
+(42422, 'Algo Execution Partners'),
+ (52355, 'Big Corporate Fund'),
+ (62654, 'Hedge Fund TXY1'),
+ (10031, 'Internal Trading Book'),
+(44044, 'Trading Account 1')"]))
+
+(comment
+  (ingest-accounts))
 
 (defn decoder [_options]
   (reify
@@ -276,6 +302,19 @@
 
           :parameters {:body ::query-body}}})
 
+(defmethod route-handler :account [_]
+  {:get {:handler (fn [{:keys [node parameters]}]
+                    {:status 200
+                     :body (do
+                             (-> (jdbc/execute! (jdbc-conn) ["SELECT * FROM accounts"])))})}
+   :post  {:handler (fn [{:keys [body-params]}]
+                      {:status 200
+                       :body (do
+                               (jdbc/execute! (jdbc-conn) ["INSERT INTO accounts(xt$id, displayName) VALUES (?, ?)" (get body-params "id") (get body-params "displayName")])
+
+
+                               )})}})
+
 (defmethod route-handler :openapi [_]
   {:get {:handler (fn [_req]
                     (-> (ring-response/resource-response "openapi.yaml")
@@ -311,7 +350,7 @@
   {:status 500 :body (throwable->ex-info e)})
 
 (def router
-  (http/router xtp/http-routes
+  (http/router http-routes
                {:expand (fn [{route-name :name, :as route} opts]
                           (r/expand (cond-> route
                                       route-name (merge (route-handler route)))
@@ -355,7 +394,7 @@
 
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (defn open-server [node ^HttpServer$Factory module]
-  (let [port (.getPort module)
+  (let [port 3333 #_(.getPort module)
         ^Server server (j/run-jetty (handler node)
                                     (merge {:port port, :h2c? true, :h2? true}
                                            #_jetty-opts
