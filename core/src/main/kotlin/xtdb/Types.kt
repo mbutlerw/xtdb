@@ -81,6 +81,7 @@ fun ArrowType.toLeg() = accept(object : ArrowTypeVisitor<String> {
 
     override fun visit(type: ArrowType.ExtensionType) = when (type) {
         is KeywordType -> "keyword"
+        is RegClassType -> "regclass"
         is TransitType -> "transit"
         is UuidType -> "uuid"
         is UriType -> "uri"
@@ -125,6 +126,7 @@ fun valueToArrowType(obj: Any?) = when (obj) {
     is URI -> UriType
     is Keyword -> KeywordType
     is ClojureForm -> TransitType
+    is RegClass -> RegClassType
     is IllegalArgumentException -> TransitType
     is RuntimeException -> TransitType
 

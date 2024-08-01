@@ -49,7 +49,7 @@
   ProjectionSpec
   (getColumnName [_] col-name)
   (getColumnType [_] col-type)
-  (project [_ _allocator in-rel _params]
+  (project [_ _allocator in-rel _schema _params]
     (.readerForName in-rel (str col-name))))
 
 (defn ->identity-projection-spec ^ProjectionSpec [col-name field]
@@ -60,7 +60,7 @@
     (reify ProjectionSpec
       (getColumnName [_] col-name)
       (getColumnType [_] :i64)
-      (project [_ allocator in-rel _params]
+      (project [_ allocator in-rel _schema _params]
         (util/with-close-on-catch [row-num-wtr (vw/->writer (BigIntVector. (str col-name) (FieldType/notNullable #xt.arrow/type :i64) allocator))]
           (let [start-row-num (aget row-num 0)
                 row-count (.rowCount in-rel)]
@@ -73,7 +73,7 @@
   (reify ProjectionSpec
     (getColumnName [_] col-name)
     (getColumnType [_] col-type)
-    (project [_ allocator in-rel _params]
+    (project [_ allocator in-rel _schema _params]
       (let [row-count (.rowCount in-rel)]
         (util/with-close-on-catch [^StructVector struct-vec (-> ^Field (apply types/->field (str col-name) #xt.arrow/type :struct false
                                                                               (for [^IVectorReader col in-rel]
@@ -95,7 +95,7 @@
   ProjectionSpec
   (getColumnName [_] to-name)
   (getColumnType [_] col-type)
-  (project [_ _allocator in-rel _params]
+  (project [_ _allocator in-rel _schema _params]
     (or (some-> (.readerForName in-rel (str from-name))
                 (.withName (str to-name)))
         (throw (ex-info (str "Column " from-name " not found in relation")
@@ -110,6 +110,7 @@
                         ^ICursor in-cursor
                         ^List #_<ProjectionSpec> projection-specs
                         ^Clock clock
+                        schema
                         params]
   ICursor
   (tryAdvance [_ c]
@@ -121,7 +122,7 @@
                            out-cols (ArrayList.)]
                        (try
                          (doseq [^ProjectionSpec projection-spec projection-specs]
-                           (let [out-col (.project projection-spec allocator read-rel params)]
+                           (let [out-col (.project projection-spec allocator read-rel schema params)]
                              (when-not (or (instance? IdentityProjectionSpec projection-spec)
                                            (instance? RenameProjectionSpec projection-spec))
                                (.add close-cols out-col))
@@ -135,8 +136,8 @@
   (close [_]
     (util/try-close in-cursor)))
 
-(defn ->project-cursor [{:keys [allocator clock params]} in-cursor projection-specs]
-  (->ProjectCursor allocator in-cursor projection-specs clock params))
+(defn ->project-cursor [{:keys [allocator clock params schema]} in-cursor projection-specs]
+  (->ProjectCursor allocator in-cursor projection-specs clock schema params))
 
 (defmethod lp/emit-expr :project [{:keys [projections relation], {:keys [append-columns?]} :opts} {:keys [param-fields] :as args}]
   (let [emitted-child-relation (lp/emit-expr relation args)]
@@ -167,7 +168,8 @@
                         (into {} (map (juxt #(.getColumnName ^ProjectionSpec %)
                                             (comp types/col-type->field #(.getColumnType ^ProjectionSpec %))))))
            :stats (:stats emitted-child-relation)
-           :->cursor (fn [opts in-cursor] (->project-cursor opts in-cursor projection-specs))})))))
+           :->cursor (fn [opts in-cursor]
+                       (->project-cursor opts in-cursor projection-specs))})))))
 
 (defmethod lp/emit-expr :map [op args]
   (lp/emit-expr (assoc op :op :project :opts {:append-columns? true}) args))
