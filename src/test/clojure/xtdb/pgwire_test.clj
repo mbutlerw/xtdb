@@ -1612,3 +1612,19 @@
 
       (t/is (= [{:_id 1, :v 1}]
                (pg/query conn "SELECT * FROM foo"))))))
+
+;;TODO pgjdnc sees regclass as a custom type so exectes a metadata query
+;;need support for ANY(array-expr) https://github.com/xtdb/xtdb/issues/3539
+#_(deftest test-regclass
+  (with-open [conn  (jdbc-conn "prepareThreshold" -1)]
+    (.execute (.prepareStatement conn "INSERT INTO foo(_id) VALUES (1)"))
+    (with-open [stmt (.prepareStatement conn "SELECT 'foo'::regclass a")]
+
+      (with-open [rs (.executeQuery stmt)]
+
+        (t/is (= [{"a" "regclass"}]
+                 (result-metadata stmt)
+                 (result-metadata rs)))
+
+        (t/is (= [{"a" 3937254498}]
+                 (rs->maps rs)))))))
