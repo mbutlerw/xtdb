@@ -382,6 +382,15 @@
 
     emitted-expr))
 
+(defn batch-bindings [emitted-expr]
+  (letfn [(child-seq [{:keys [children] :as expr}]
+            (lazy-seq
+             (cons expr (mapcat child-seq children))))]
+    (->> (for [{:keys [batch-bindings]} (child-seq emitted-expr)
+               batch-binding batch-bindings]
+           batch-binding)
+         (sequence (comp (distinct) cat)))))
+
 (defmethod codegen-expr :variable [{:keys [variable rel idx extract-vec-from-rel?],
                                     :or {rel rel-sym, idx idx-sym, extract-vec-from-rel? true}}
                                    {:keys [var->col-type extract-vecs-from-rel?]
@@ -1032,6 +1041,11 @@
 
 ;; SQL Session Variable functions.
 ;; We currently return hard-coded values for these functions, as we do not currently have any of these concepts.
+;; note from the users PoV the search path doesn't include implicitly included schemas such as pg_catalog
+(def explicit-search-path ["public"])
+(def implicit-search-path ["pg_catalog"])
+(def search-path (concat implicit-search-path explicit-search-path))
+
 (defmethod codegen-call [:current_user] [_]
   {:return-type :utf8 :->call-code (fn [_] `(ByteBuffer/wrap (.getBytes "xtdb" StandardCharsets/UTF_8)))})
 
@@ -1040,6 +1054,23 @@
 
 (defmethod codegen-call [:current_schema] [_]
   {:return-type :utf8 :->call-code (fn [_] `(ByteBuffer/wrap (.getBytes "public" StandardCharsets/UTF_8)))})
+
+(defn current-schemas [include-implicit?]
+  (let [schemas (if include-implicit? search-path explicit-search-path)
+        schema-entry-box (ValueBox.)]
+    (reify ListValueReader
+      (size [_] (count schemas))
+      (nth [_ idx]
+        (.writeBytes
+         schema-entry-box
+         (ByteBuffer/wrap
+          (.getBytes ^String (nth schemas idx) StandardCharsets/UTF_8)))
+        schema-entry-box))))
+
+(defmethod codegen-call [:current_schemas :bool] [_]
+    {:return-type [:list :utf8]
+     :->call-code (fn [[include-implicit?]]
+                    `(current-schemas ~include-implicit?))})
 
 (defn- allocate-concat-out-buffer ^ByteBuffer [bufs]
   (loop [i (int 0)
@@ -1458,15 +1489,6 @@
 
 (def out-vec-sym (gensym 'out_vec))
 (def ^:private out-writer-sym (gensym 'out_writer_sym))
-
-(defn batch-bindings [emitted-expr]
-  (letfn [(child-seq [{:keys [children] :as expr}]
-            (lazy-seq
-             (cons expr (mapcat child-seq children))))]
-    (->> (for [{:keys [batch-bindings]} (child-seq emitted-expr)
-               batch-binding batch-bindings]
-           batch-binding)
-         (sequence (comp (distinct) cat)))))
 
 (defn write-value-out-code [return-type]
   (let [field (types/col-type->field return-type)]
