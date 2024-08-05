@@ -1440,6 +1440,7 @@
 
   (visitCurrentUserFunction [_ _] '(current-user))
   (visitCurrentSchemaFunction [_ _] '(current-schema))
+  (visitCurrentSchemasFunction [this ctx] (list 'current-schemas (-> (.expr ctx) (.accept this))))
   (visitCurrentDatabaseFunction [_ _] '(current-database))
 
   (visitSimpleCaseExpr [this ctx]
