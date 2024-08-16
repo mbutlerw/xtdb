@@ -1,33 +1,44 @@
 (ns xtdb.expression.pg
   (:require [xtdb.expression :as expr]
             [clojure.string :as str]
-            [xtdb.error :as err]))
+            [xtdb.error :as err]
+            [clojure.math :as math]))
 
 (set! *unchecked-math* :warn-on-boxed)
 
-(defn symbol-table-names
-  "returns possible symbol table names based on search path for unqualified names"
+(defn table-paths
+  "returns possible table paths based on search path for unqualified names"
   [table]
   (let [parts (str/split table #"\.")]
     (if (= 1 (count parts))
-      (mapv #(symbol % (first parts)) expr/search-path)
-      [(symbol (str/join "." (butlast parts)) (last parts))])))
+      (mapv #(vector % (first parts)) expr/search-path)
+     [parts])))
 
-(defn string-table-name [table]
-  (if (contains? (set expr/search-path) (namespace table))
-    (name table)
-    (str (namespace table) "." (name table))))
+(defn string-table-name [[schema-name table-name]]
+  (if (contains? (set expr/search-path) schema-name)
+    table-name
+    (str schema-name "." table-name)))
 
-(defn find-matching-table-name [schema tn]
-  (some #(when (contains? (:tables schema) %) %) (symbol-table-names tn)))
+(defn find-matching-table-oid [schema tn]
+  (some #(get-in schema (conj (vec %) "_oid")) (table-paths tn)))
+
+(defn find-table-name-by-oid [schema oid]
+  (->> schema
+       (keep
+        (fn [[schema-name tables]]
+          (first (keep (fn [[table cols]]
+                         (when (= oid (get cols "_oid"))
+                           [schema-name table]))
+                       tables))))
+       (first)))
 
 (defmethod expr/codegen-cast [:utf8 :regclass] [{:keys [target-type]}]
   {:return-type target-type
    :->call-code
    #(do
       `(let [tn# (expr/buf->str ~@%)]
-         (if-let [matching-tn# (find-matching-table-name ~expr/schema-sym tn#)]
-           (hash matching-tn#)
+         (if-let [matching-table-oid# (find-matching-table-oid ~expr/schema-sym tn#)]
+           matching-table-oid#
            (throw (err/runtime-err ::unknown-relation
                                    {::err/message (format "Relation %s does not exist" tn#)})))))})
 
@@ -36,7 +47,7 @@
    :->call-code
    #(do
       `(let [oid# ~@%]
-        (if-let [tn# (get-in ~expr/schema-sym [:oid->table oid#])]
+         (if-let [tn# (find-table-name-by-oid ~expr/schema-sym oid#)]
           (expr/resolve-utf8-buf (string-table-name tn#))
           (expr/resolve-utf8-buf (str oid#)))))})
 

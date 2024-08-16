@@ -1937,7 +1937,7 @@ JOIN docs2 FOR VALID_TIME ALL AS d2
   (xt/submit-tx tu/*node* [[:sql "INSERT INTO foo (_id) VALUES (1)"]])
 
   (t/testing "regclass uses search path to resolve unqualified names"
-    (t/is (= [{:v (RegClass. -357712798)}]
+    (t/is (= [{:v (RegClass. 1151209360)}]
              (xt/q tu/*node* "SELECT 'public.foo'::regclass v")
              (xt/q tu/*node* "SELECT 'foo'::regclass v"))
           "text -> regclass"))
@@ -1951,12 +1951,12 @@ JOIN docs2 FOR VALID_TIME ALL AS d2
              (xt/q tu/*node* "SELECT 'information_schema.columns'::regclass::varchar v"))
           "text -> regclass -> text"))
 
-  (t/is (= [{:v -357712798}]
+  (t/is (= [{:v 1151209360}]
            (xt/q tu/*node* "SELECT 'public.foo'::regclass::int v"))
         "text -> regclass -> int")
 
-  (t/is (= [{:v (RegClass. -357712798)}]
-           (xt/q tu/*node* "SELECT (-357712798)::regclass v"))
+  (t/is (= [{:v (RegClass. 1151209360)}]
+           (xt/q tu/*node* "SELECT 1151209360::regclass v"))
           "int -> regclass")
 
   (t/is (thrown-with-msg?
@@ -1970,7 +1970,7 @@ JOIN docs2 FOR VALID_TIME ALL AS d2
           "returns a stringified oid/int"))
 
   (t/is (= [{:atttypmod -1,
-             :attrelid -357712798,
+             :attrelid 1151209360,
              :attidentity "",
              :attgenerated "",
              :attnotnull false,
@@ -1982,14 +1982,14 @@ JOIN docs2 FOR VALID_TIME ALL AS d2
            (xt/q tu/*node* "SELECT * FROM pg_attribute WHERE attrelid = 'public.foo'::regclass")))
 
   (t/is (= [{:v true}]
-           (xt/q tu/*node* "SELECT (-357712798)::regclass = 'foo'::regclass v"))
+           (xt/q tu/*node* "SELECT 1151209360::regclass = 'foo'::regclass v"))
         "regclass with identical oid are equal"))
 
 (t/deftest test-regclass-search-path-precedence
 
   (xt/submit-tx tu/*node* [[:sql "INSERT INTO pg_class (_id) VALUES (1)"]])
 
-  (t/is (= [{:v (RegClass. 529124840)}]
+  (t/is (= [{:v (RegClass. 1323875402)}]
            (xt/q tu/*node* "SELECT 'pg_class'::regclass v")
            (xt/q tu/*node* "SELECT 'pg_catalog.pg_class'::regclass v"))
         "matches pg_catalog.pg_class over public.pg_class as the former comes first in the search path"))
