@@ -135,7 +135,7 @@
 
   (^xtdb.query.PreparedQuery [query, {:keys [^IScanEmitter scan-emitter, ^BufferAllocator allocator,
                                              ^RefCounter ref-ctr ^IWatermarkSource wm-src] :as deps}
-                              {:keys [param-types default-tz table-info]}]
+                              {:keys [param-types default-tz schema]}]
 
    (let [conformed-query (s/conform ::lp/logical-plan query)]
      (when (s/invalid? conformed-query)
@@ -155,12 +155,10 @@
            _ (assert (or scan-emitter (empty? scan-cols)))
 
            relevant-schema-at-prepare-time
-           (when (and table-info scan-emitter)
-             (with-open [wm (.openWatermark wm-src)]
-               (->> tables
-                    (map #(str (get-in % [:scan-opts :table])))
-                    (mapcat #(map (partial vector %) (get table-info %)))
-                    (.scanFields scan-emitter wm))))
+           (->> tables
+                (map #(str (get-in % [:scan-opts :table])))
+                ;;public tables don't have sn, other tables do, bleh...
+                (#(get-in schema ["public" %] {})))
 
            cache (ConcurrentHashMap.)
            ordered-outer-projection (:named-projection (meta query))
@@ -190,20 +188,15 @@
                  (columnFields [_]
                    (->column-fields ordered-outer-projection fields))
                  (openCursor [_]
-                   (let [table-info-at-execution-time (when wm-src (scan/tables-with-cols wm-src scan-emitter))]
-                     (when relevant-schema-at-prepare-time
-                       (let [schema-at-execution-time (with-open [wm (.openWatermark wm-src)]
-                                                        (.scanFields scan-emitter wm
-                                                                     (mapcat #(map (partial vector (key %)) (val %))
-                                                                             table-info-at-execution-time)))]
+                   (let [schema-at-execution-time (scan/schema wm-src)]
 
-                         ;;TODO nullability of col is considered a schema change, not relevant for pgwire, maybe worth ignoring
-                         ;;especially given our "per path schema" principal.
-                         (when-not (= relevant-schema-at-prepare-time
-                                      (select-keys schema-at-execution-time (keys relevant-schema-at-prepare-time)))
-                           (throw (err/runtime-err :prepared-query-out-of-date
-                                                   ;;TODO consider adding the schema diff to the error, potentially quite large.
-                                                   {::err/message "Relevant table schema has changed since preparing query, please prepare again"})))))
+                     ;;TODO nullability of col is considered a schema change, not relevant for pgwire, maybe worth ignoring
+                     ;;especially given our "per path schema" principal.
+                     (when-not (= relevant-schema-at-prepare-time
+                                  (select-keys schema-at-execution-time (keys relevant-schema-at-prepare-time)))
+                       (throw (err/runtime-err :prepared-query-out-of-date
+                                               ;;TODO consider adding the schema diff to the error, potentially quite large.
+                                               {::err/message "Relevant table schema has changed since preparing query, please prepare again"})))
                      (.acquire ref-ctr)
                      (let [^BufferAllocator allocator
                            (if allocator
@@ -218,14 +211,7 @@
                                                      (update :at-tx (fnil identity (some-> wm .txBasis)))
                                                      (assoc :current-time current-time))
                                           :params params
-                                          :schema
-                                          (let [tables (merge info-schema/table-info
-                                                              {'xt/txs #{"xt$id" "committed" "error" "tx_time"}}
-                                                              (info-schema/namespace-public-tables table-info))]
-                                            {:tables tables
-                                             :oid->table (->> tables
-                                                              (map (fn [[tn _]] [(hash tn) tn]))
-                                                              (into {}))})})
+                                          :schema schema})
 
                                (wrap-cursor wm allocator clock ref-ctr fields)))
 
@@ -256,9 +242,9 @@
     (reify
       IQuerySource
       (prepareRaQuery [_ query wm-src query-opts]
-        (prepare-ra query (assoc deps :wm-src wm-src) (assoc query-opts :table-info (scan/tables-with-cols wm-src (:scan-emitter deps)))))
+        (prepare-ra query (assoc deps :wm-src wm-src) (assoc query-opts :schema (scan/schema wm-src))))
       (planQuery [_ query wm-src query-opts]
-        (let [table-info (scan/tables-with-cols wm-src (:scan-emitter deps))
+        (let [table-info (scan/schema wm-src)
               plan-query-opts
               (-> query-opts
                   (select-keys

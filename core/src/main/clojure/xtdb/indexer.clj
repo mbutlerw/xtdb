@@ -443,8 +443,7 @@
     (reify OpIndexer
       (indexOp [_ tx-op-idx]
         (let [query-str (.getObject query-rdr tx-op-idx)
-              tables-with-cols (scan/tables-with-cols wm-src scan-emitter)
-              compiled-query (sql/compile-query query-str {:table-info tables-with-cols})
+              compiled-query (sql/compile-query query-str {:table-info (scan/schema wm-src)})
               param-count (:param-count (meta compiled-query))]
           ;; TODO handle error
           (zmatch (r/vector-zip compiled-query)
@@ -497,12 +496,11 @@
         erase-idxer (->erase-rel-indexer live-idx-tx)]
     (reify OpIndexer
       (indexOp [_ tx-op-idx]
-        (let [xtql-op (.form ^ClojureForm (.getObject op-rdr tx-op-idx))
-              tables-with-cols (scan/tables-with-cols wm-src scan-emitter)]
+        (let [xtql-op (.form ^ClojureForm (.getObject op-rdr tx-op-idx))]
           (when-not (instance? TxOp$XtqlOp xtql-op)
             (throw (UnsupportedOperationException. "unknown XTQL DML op")))
 
-          (zmatch (xtql/compile-dml xtql-op (assoc tx-opts :table-info tables-with-cols))
+          (zmatch (xtql/compile-dml xtql-op (assoc tx-opts :table-info (scan/schema wm-src)))
             [:insert query-opts inner-query]
             (foreach-arg-row allocator args-rdr tx-op-idx
                              (-> (query-indexer q-src wm-src upsert-idxer inner-query tx-opts query-opts)
@@ -600,7 +598,7 @@
 
                   wm-src (reify IWatermarkSource
                            (openWatermark [_]
-                             (Watermark. nil (.openWatermark live-idx-tx))))
+                             (Watermark. nil (.openWatermark live-idx-tx) {})))
 
                   tx-opts {:basis {:at-tx tx-key, :current-time system-time}
                            :default-tz (ZoneId/of (str (-> (.getVector tx-root "default-tz")

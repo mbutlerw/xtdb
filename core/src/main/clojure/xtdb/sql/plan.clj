@@ -4,6 +4,7 @@
             [clojure.tools.logging :as log]
             [xtdb.api :as xt]
             [xtdb.error :as err]
+            [xtdb.expression :as expr]
             [xtdb.information-schema :as info-schema]
             [xtdb.logical-plan :as lp]
             [xtdb.time :as time]
@@ -547,18 +548,25 @@
               (->DerivedTable plan table-alias unique-table-alias
                               (->insertion-ordered-set (or cols cte-cols)))))
 
-          (let [[sn table-cols] (or (when-let [table-cols (get table-info (if sn
-                                                                            (symbol (str sn) (str tn))
-                                                                            tn))]
-                                      [sn table-cols])
+          ;;TODO fix xt' schema, exists in public but claims not to.
+          ;; user space tables claim to be in public schema but public.tn
+          ;; is not valid for in scan.
+          (let [[sn table-cols] (or (if sn
+                                      (when-let [cols (get-in table-info [sn tn])]
+                                        [sn cols])
+                                      (->> expr/search-path
+                                           (mapv symbol)
+                                           (keep #(when-let [cols (get-in table-info [% tn])]
+                                                    [% cols]))
+                                           (first)))
+                                  (add-warning! env (->BaseTableNotFound sn tn)))
 
-                                    (when-not sn
-                                      (when-let [table-cols (get info-schema/unq-pg-catalog tn)]
-                                        ['pg_catalog table-cols]))
-
-                                    (add-warning! env (->BaseTableNotFound sn tn)))
-                [sn tn] (if (= sn 'xt)
+                [sn tn] (cond
+                          (= sn 'xt)
                           [nil (symbol (str "xt$" tn))]
+                          (= sn 'public)
+                          [nil tn]
+                          :else
                           [sn tn])]
             (->BaseTable env ctx sn tn table-alias unique-table-alias
                          (->insertion-ordered-set (or cols table-cols))
@@ -2175,7 +2183,8 @@
           {:keys [for-valid-time], vt-projection :projection} (some-> (.dmlStatementValidTimeExtents ctx)
                                                                       (.accept (->DmlValidTimeExtentsVisitor env scope)))
 
-          table-cols (if-let [cols (get table-info table-name)]
+          ;;TODO schema support in DML
+          table-cols (if-let [cols (get-in table-info ['public table-name])]
                        cols
                        (do
                          (add-warning! env (->BaseTableNotFound nil table-name))
@@ -2239,7 +2248,7 @@
           {:keys [for-valid-time], vt-projection :projection} (some-> (.dmlStatementValidTimeExtents ctx)
                                                                       (.accept (->DmlValidTimeExtentsVisitor env scope)))
 
-          table-cols (if-let [cols (get table-info table-name)]
+          table-cols (if-let [cols (get table-info ['public table-name])]
                        cols
                        (do
                          (add-warning! env (->BaseTableNotFound nil table-name))
@@ -2276,7 +2285,7 @@
           unique-table-alias (symbol (str table-alias "." (swap! !id-count inc)))
           aliased-cols (mapv (fn [col] {col (->col-sym (str unique-table-alias) (str col))}) internal-cols)
 
-          table-cols (if-let [cols (get table-info table-name)]
+          table-cols (if-let [cols (get table-info ['public table-name])]
                        cols
                        (do
                          (add-warning! env (->BaseTableNotFound nil table-name))
@@ -2333,19 +2342,26 @@
       (add-throwing-error-listener)))
 
 (defn- xform-table-info [table-info]
-  (into {}
-        (for [[tn cns] (merge info-schema/table-info
-                              {'xt/txs #{"xt$id" "committed" "error" "tx_time"}}
-                              table-info)]
-          [(symbol tn) (->> cns
-                            (map ->col-sym)
-                            ^Collection
-                            (sort-by identity (fn [s1 s2]
-                                                (cond
-                                                  (= 'xt$id s1) -1
-                                                  (= 'xt$id s2) 1
-                                                  :else (compare s1 s2))))
-                            ->insertion-ordered-set)])))
+  (->> table-info
+       (map
+        (fn [[schema tables]]
+          [(symbol schema)
+           (->> tables
+                (map (fn [[table cols]]
+                       [(symbol table)
+                        (->> cols
+                             (keys)
+                             (remove #(= "_oid" %))
+                             (map ->col-sym)
+                             ^Collection
+                             (sort-by identity (fn [s1 s2]
+                                                 (cond
+                                                   (= 'xt$id s1) -1
+                                                   (= 'xt$id s2) 1
+                                                   :else (compare s1 s2))))
+                             ->insertion-ordered-set)]))
+                (into {}))]))
+       (into {})))
 
 (defn log-warnings [!warnings]
   (doseq [warning @!warnings]

@@ -41,7 +41,7 @@
            (xtdb.trie ArrowHashTrie$Leaf EventRowPointer HashTrie HashTrieKt LiveHashTrie$Leaf MergePlanNode MergePlanTask)
            (xtdb.util TemporalBounds TemporalBounds$TemporalColumn)
            (xtdb.vector IMultiVectorRelationFactory IRelationWriter IVectorReader IVectorWriter IndirectMultiVectorReader RelationReader RelationWriter)
-           (xtdb.watermark ILiveTableWatermark IWatermarkSource Watermark)))
+           (xtdb.watermark ILiveTableWatermark Watermark IWatermarkSource)))
 
 (s/def ::table symbol?)
 
@@ -112,10 +112,6 @@
         (apply-constraint for-valid-time (.getValidFrom bounds) (.getValidTo bounds))
         (apply-constraint for-system-time (.getSystemFrom bounds) (.getSystemTo bounds))))
     bounds))
-
-(defn tables-with-cols [^IWatermarkSource wm-src ^IScanEmitter scan-emitter]
-  (with-open [^Watermark wm (.openWatermark wm-src)]
-    (.allTableColNames scan-emitter wm)))
 
 (defn temporal-column? [col-name]
   (contains? #{"xt$system_from" "xt$system_to" "xt$valid_from" "xt$valid_to"}
@@ -385,6 +381,10 @@
         (when node-taken?
           (vec leaves))))))
 
+(defn schema [^IWatermarkSource wm-src]
+  (with-open [^Watermark wm (.openWatermark wm-src)]
+    (.schema wm)))
+
 (defmethod ig/prep-key ::scan-emitter [_ opts]
   (merge opts
          {:metadata-mgr (ig/ref ::meta/metadata-manager)
@@ -413,7 +413,7 @@
                       col-name (str col-name)]
                   ;; TODO move to fields here
                   (-> (or (some-> (types/temporal-col-types col-name) types/col-type->field)
-                          (if-let [info-field (get-in info-schema/derived-tables [(symbol table) col-name])]
+                          (if-let [info-field (get (info-schema/schema-for-metadata-table (symbol table)) col-name)]
                             info-field
                             (types/merge-fields (.columnField metadata-mgr table col-name)
                                                 (some-> (.liveIndex wm)
@@ -467,7 +467,7 @@
         {:fields fields
          :stats {:row-count row-count}
          :->cursor (fn [{:keys [allocator, ^Watermark watermark, basis, schema, params]}]
-                     (if-let [derived-table-schema (info-schema/derived-tables table)]
+                     (if-let [derived-table-schema (info-schema/schema-for-metadata-table table)]
                        (info-schema/->cursor allocator derived-table-schema table col-names col-preds schema params metadata-mgr watermark)
                        (let [iid-bb (selects->iid-byte-buffer selects params)
                              col-preds (cond-> col-preds

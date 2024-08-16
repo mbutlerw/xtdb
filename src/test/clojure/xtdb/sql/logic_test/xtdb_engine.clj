@@ -2,6 +2,7 @@
   (:require [clojure.string :as str]
             [xtdb.api :as xt]
             [xtdb.error :as err]
+            [xtdb.information-schema :as info-schema]
             xtdb.node.impl
             [xtdb.operator.scan :as scan]
             [xtdb.sql.logic-test.runner :as slt]
@@ -38,8 +39,7 @@
   node)
 
 (defn- node->table-info [node]
-  (scan/tables-with-cols (util/component node :xtdb/indexer)
-                         (util/component node ::scan/scan-emitter)))
+  (scan/schema (util/component node :xtdb/indexer)))
 
 (defn- execute-sql-query [node sql-statement variables {:keys [direct-sql] :as opts}]
   (let [!cache (atom {})
