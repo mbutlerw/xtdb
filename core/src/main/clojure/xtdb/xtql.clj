@@ -897,7 +897,13 @@
 
 (def compile-query
   (-> (fn [query {:keys [table-info]}]
-        (let [{:keys [ra-plan]} (binding [*gensym* (util/seeded-gensym "_" 0)
+        (let [table-info (->> (get table-info "public")
+                              (map (fn [[table-name table-cols]]
+                                     [table-name (-> table-cols
+                                                     (dissoc "_oid")
+                                                     (keys))]))
+                              (into {}))
+              {:keys [ra-plan]} (binding [*gensym* (util/seeded-gensym "_" 0)
                                           *table-info* table-info]
                                   (plan-query query))]
 
@@ -1024,7 +1030,13 @@
        (:ra-plan (plan-query (.query query)))]]]))
 
 (defn compile-dml [query {:keys [table-info] :as tx-opts}]
-  (let [ra-plan (binding [*gensym* (util/seeded-gensym "_" 0)
+  (let [table-info (->> (get table-info "public")
+                        (map (fn [[table-name table-cols]]
+                               [table-name (-> table-cols
+                                               (dissoc "_oid")
+                                               (keys))]))
+                        (into {}))
+        ra-plan (binding [*gensym* (util/seeded-gensym "_" 0)
                           *table-info* table-info]
                   (plan-dml query tx-opts))
         [dml-op dml-op-opts plan] ra-plan]
