@@ -2285,7 +2285,7 @@
           {:keys [for-valid-time], vt-projection :projection} (some-> (.dmlStatementValidTimeExtents ctx)
                                                                       (.accept (->DmlValidTimeExtentsVisitor env scope)))
 
-          table-cols (if-let [cols (get table-info ['public table-name])]
+          table-cols (if-let [cols (get-in table-info ['public table-name])]
                        cols
                        (do
                          (add-warning! env (->BaseTableNotFound nil table-name))
@@ -2322,7 +2322,7 @@
           unique-table-alias (symbol (str table-alias "." (swap! !id-count inc)))
           aliased-cols (mapv (fn [col] {col (->col-sym (str unique-table-alias) (str col))}) internal-cols)
 
-          table-cols (if-let [cols (get table-info ['public table-name])]
+          table-cols (if-let [cols (get-in table-info ['public table-name])]
                        cols
                        (do
                          (add-warning! env (->BaseTableNotFound nil table-name))
@@ -2473,6 +2473,7 @@
   ([sql] (plan-statement sql {}))
 
   ([sql {:keys [scope table-info]}]
+
    (let [!errors (atom [])
          !warnings (atom [])
          !param-count (atom 0)

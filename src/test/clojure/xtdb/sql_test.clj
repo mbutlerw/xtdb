@@ -7,8 +7,9 @@
             [xtdb.sql :as sql]
             [xtdb.sql.plan :as plan]
             [xtdb.test-util :as tu]
-            [xtdb.types RegClass])
-  (:import xtdb.api.tx.TxOps))
+            [xtdb.types])
+  (:import xtdb.api.tx.TxOps
+           xtdb.types.RegClass))
 
 (t/use-fixtures :each tu/with-mock-clock tu/with-node)
 

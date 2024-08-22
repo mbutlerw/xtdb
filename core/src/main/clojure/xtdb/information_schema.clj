@@ -52,7 +52,7 @@
                 "tablename" (types/col-type->field "tablename" :utf8)
                 "tableowner" (types/col-type->field "tableowner" :utf8)
                 "tablespace" (types/col-type->field "tablespace" :null)}
-   "pg_type "{"oid" (types/col-type->field "oid" :i32)
+   "pg_type" {"oid" (types/col-type->field "oid" :i32)
               "typname" (types/col-type->field "typname" :utf8)
               "typnamespace" (types/col-type->field "typnamespace" :i32)
               "typowner" (types/col-type->field "typowner" :i32)
