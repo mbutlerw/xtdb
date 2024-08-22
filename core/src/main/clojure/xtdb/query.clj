@@ -164,8 +164,9 @@
            relevant-schema-at-prepare-time
            (->> tables
                 (map #(str (get-in % [:scan-opts :table])))
-                ;;public tables don't have sn, other tables do, bleh...
-                (#(get-in schema ["public" %] {})))
+                ;;HACK hard coding to public schemas for now because they are the only ones that change
+                ;;wants first class support for schemas in scan
+                (select-keys (get schema "public")))
 
            cache (ConcurrentHashMap.)
            ordered-outer-projection (:named-projection (meta query))
@@ -195,7 +196,7 @@
                  (columnFields [_]
                    (->column-fields ordered-outer-projection fields))
                  (openCursor [_]
-                   (let [schema-at-execution-time (scan/schema wm-src)]
+                   (let [schema-at-execution-time (get (scan/schema wm-src) "public")]
 
                      ;;TODO nullability of col is considered a schema change, not relevant for pgwire, maybe worth ignoring
                      ;;especially given our "per path schema" principal.
