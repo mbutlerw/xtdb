@@ -2,14 +2,15 @@
   (:require [clojure.tools.logging :as log]
             [integrant.core :as ig]
             [xtdb.bitemporal :as bitemp]
+            [xtdb.file-list :as fl]
+            [xtdb.metrics :as metrics]
             [xtdb.trie :as trie]
             [xtdb.types :as types]
-            [xtdb.util :as util]
-            [xtdb.metrics :as metrics])
+            [xtdb.util :as util])
   (:import (java.lang AutoCloseable)
            [java.nio.file Path]
            [java.time Duration]
-           [java.util ArrayList Arrays Comparator HashSet LinkedList PriorityQueue]
+           [java.util Arrays Comparator HashSet LinkedList PriorityQueue]
            [java.util.concurrent Executors Semaphore TimeUnit]
            [java.util.concurrent.locks ReentrantLock]
            (java.util.function Predicate)
@@ -151,90 +152,55 @@
       (log/error t "Error running compaction job.")
       (throw t))))
 
-(defn- l0->l1-compaction-job [{l0-trie-keys 0, l1-trie-keys 1} {:keys [^long l1-file-size-rows]}]
-  (let [last-l1-file (last l1-trie-keys)
-        l1-compacted-row (long (if-let [{:keys [^long next-row]} last-l1-file]
-                                 next-row
-                                 -1))]
+(defn- l0->l1-compaction-job [fl-state {:keys [^long l1-file-size-rows]}]
+  (when-let [live-l0 (seq (->> (get fl-state [0 []])
+                               (take-while #(= :live (:state %)))))]
+    (let [latest-l1 (->> (get fl-state [1 []])
+                         (take-while #(< (:rows %) l1-file-size-rows))
+                         first)]
+      (loop [rows (:rows latest-l1 0)
+             [{^long l0-rows :rows, :as l0-file} & more-l0s] (reverse live-l0)
+             res (cond-> [] latest-l1 (conj latest-l1))]
+        (if (and l0-file (< rows l1-file-size-rows))
+          (recur (+ rows l0-rows) more-l0s (conj res l0-file))
 
-    (when-let [current-l0-trie-keys (seq (->> l0-trie-keys
-                                              (drop-while (fn [{:keys [^long next-row]}]
-                                                            (<= next-row l1-compacted-row)))))]
+          {:trie-keys (mapv :trie-key res)
+           :out-trie-key (trie/->log-l0-l1-trie-key 1
+                                                    (:first-row (first res))
+                                                    (:next-row (last res))
+                                                    rows)})))))
 
-      ;; if there are current L0 files, merge them into the latest l1 file until it's full
-      (let [{:keys [trie-keys ^long first-row ^long next-row ^long rows]}
-            (reduce (fn [{:keys [^long rows first-row trie-keys]}
-                         {^long l0-rows :rows, l0-first-row :first-row l0-trie-key :trie-key, :keys [^long next-row]}]
-                      (let [new-rows (+ rows l0-rows)]
-                        (cond-> {:first-row (or first-row l0-first-row)
-                                 :rows new-rows
-                                 :trie-keys (conj trie-keys l0-trie-key)
-                                 :next-row next-row}
-                          (>= new-rows l1-file-size-rows) reduced)))
+(defn- l1p-compaction-jobs [fl-state {:keys [^long l1-file-size-rows]}]
+  (for [[[level part] files] fl-state
+        :when (> level 0)
+        :let [live-files (-> files
+                             (->> (remove #(= :garbage (:state %))))
+                             (cond->> (= level 1) (filter #(>= (:rows %) l1-file-size-rows))))]
+        :when (>= (count live-files) fl/branch-factor)
+        :let [live-files (reverse live-files)]
 
-                    (or (when-let [{:keys [^long rows first-row trie-key]} last-l1-file]
-                          (when (< rows l1-file-size-rows)
-                            {:first-row first-row :rows rows, :trie-keys [trie-key]}))
+        p (range fl/branch-factor)
+        :let [out-level (inc level)
+              out-path (conj part p)
+              {lnp1-next-row :next-row} (first (get fl-state [out-level out-path]))
 
-                        {:rows 0, :trie-keys []})
+              in-files (-> live-files
+                           (cond->> lnp1-next-row (drop-while #(<= (:next-row %) lnp1-next-row)))
+                           (->> (take fl/branch-factor)))]
 
-                    current-l0-trie-keys)]
+        :when (seq in-files)
+        :let [trie-keys (mapv :trie-key in-files)
+              out-next-row (:next-row (last in-files))]]
+    {:trie-keys trie-keys
+     :path (byte-array out-path)
+     :out-trie-key (trie/->log-l2+-trie-key out-level out-path out-next-row)}))
 
-        {:trie-keys trie-keys
-         :out-trie-key (trie/->log-l0-l1-trie-key 1 first-row next-row rows)}))))
-
-(defn compaction-jobs [meta-file-names {:keys [^long l1-file-size-rows] :as opts}]
-  (when (seq meta-file-names)
-    (let [!compaction-jobs (ArrayList.)
-
-          level-grouped-file-names (->> meta-file-names
-                                        (keep trie/parse-trie-file-path)
-                                        (group-by :level))]
-
-      (loop [level (long (last (sort (keys level-grouped-file-names))))
-             ^longs !compacted-rows-above (trie/path-array (inc level))]
-        (if (zero? level)
-          (when-let [job (l0->l1-compaction-job level-grouped-file-names opts)]
-            (.add !compaction-jobs job))
-            ;; exit `loop`
-
-
-          (let [!compacted-rows (trie/rows-covered-below !compacted-rows-above)
-                lvl-trie-keys (cond->> (get level-grouped-file-names level)
-                                (= level 1) (filter (fn [{:keys [^long rows]}]
-                                                      (>= rows l1-file-size-rows))))]
-
-            (doseq [[^long path-idx trie-keys] (->> lvl-trie-keys
-                                                    (group-by (if (= level 1)
-                                                                (constantly 0)
-                                                                (comp trie/path-array-idx :part))))
-
-                    :let [min-compacted-row (aget !compacted-rows path-idx)
-                          trie-keys (->> trie-keys
-                                         (drop-while (fn [{:keys [^long next-row]}]
-                                                       (<= next-row min-compacted-row))))]
-                    :when (seq trie-keys)]
-
-              (aset !compacted-rows path-idx (max min-compacted-row ^long (:next-row (last trie-keys))))
-
-              (when (= 4 (count (take 4 trie-keys)))
-                (dotimes [path-suffix 4]
-                  (let [compacted-row (aget !compacted-rows-above (+ (* path-idx 4) path-suffix))
-                        trie-keys (->> trie-keys
-                                       (drop-while (fn [{:keys [^long next-row]}]
-                                                     (<= next-row compacted-row)))
-                                       (take 4))]
-                    (when (= 4 (count trie-keys))
-                      (let [{:keys [part ^long next-row]} (last trie-keys)
-                            compaction-part (HashTrieKt/conjPath (or part (byte-array 0)) path-suffix)]
-                        (.add !compaction-jobs
-                              {:trie-keys (mapv :trie-key trie-keys)
-                               :path compaction-part
-                               :out-trie-key (trie/->log-l2+-trie-key (inc level) compaction-part next-row)})))))))
-
-            (recur (dec level) !compacted-rows))))
-
-      (vec !compaction-jobs))))
+(defn compaction-jobs [meta-file-names opts]
+  (let [fl-state (->> (sort meta-file-names)
+                      (reduce fl/apply-file-notification {}))]
+    (concat (when-let [job (l0->l1-compaction-job fl-state opts)]
+              [job])
+            (l1p-compaction-jobs fl-state opts))))
 
 (defrecord NoOp []
   PCompactor

@@ -55,7 +55,7 @@ class RemoteBufferPool(
             minMultipartPartSize = size
         }
 
-        private val FileNotificationAddition = requiringResolve("xtdb.file-list-cache/addition")
+        private val FileNotificationAddition = requiringResolve("xtdb.file-list/addition")
 
         private fun pathToSeekableByteChannel(path: Path) = SeekableReadChannel(Files.newByteChannel(path, READ))
 

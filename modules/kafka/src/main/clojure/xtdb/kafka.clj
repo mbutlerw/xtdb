@@ -2,10 +2,9 @@
   (:require [clojure.java.io :as io]
             [clojure.tools.logging :as ctl]
             [xtdb.api :as xt]
-            [xtdb.file-list-cache :as flc]
+            [xtdb.file-list :as fl]
             [xtdb.log :as log]
             [xtdb.node :as xtn]
-            [xtdb.serde :as serde]
             [xtdb.time :as time]
             [xtdb.util :as util])
   (:import java.lang.AutoCloseable
@@ -153,7 +152,7 @@
                             (doseq [^ConsumerRecord record (poll-consumer consumer poll-duration)]
                               (when (Thread/interrupted)
                                 (throw (InterruptedException.)))
-                              (.accept subscriber (flc/transit->file-notification (.value record))))
+                              (.accept subscriber (fl/transit->file-notification (.value record))))
 
                             (when-not (Thread/interrupted)
                               (recur)))
@@ -168,7 +167,7 @@
   FileListCache
   (appendFileNotification [_ n]
     (let [fut (CompletableFuture.)]
-      (.send producer (ProducerRecord. (.topic tp) nil (flc/file-notification->transit n))
+      (.send producer (ProducerRecord. (.topic tp) nil (fl/file-notification->transit n))
              (reify Callback
                (onCompletion [_ _record-metadata e]
                  (if e
