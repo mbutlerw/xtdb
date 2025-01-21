@@ -18,7 +18,7 @@
            [org.apache.kafka.common.errors InterruptException TopicAuthorizationException TopicExistsException UnknownTopicOrPartitionException]
            org.apache.kafka.common.TopicPartition
            [xtdb.api Xtdb$Config]
-           [xtdb.api.log FileListCache FileListCache$Subscriber Kafka Kafka$Factory Log TxLog$Record TxLog$Subscriber]))
+           [xtdb.api.log FileLog FileLog$Subscriber Kafka Kafka$Factory Log TxLog$Record TxLog$Subscriber]))
 
 (defn ->kafka-config [{:keys [bootstrap-servers ^Path properties-file properties-map]}]
   (merge {"bootstrap.servers" bootstrap-servers}
@@ -135,7 +135,7 @@
     (util/try-close consumer)
     (util/try-close producer)))
 
-(defn- handle-file-notif-subscriber [{:keys [poll-duration tp kafka-config]} ^FileListCache$Subscriber subscriber]
+(defn- handle-file-notif-subscriber [{:keys [poll-duration tp kafka-config]} ^FileLog$Subscriber subscriber]
   (doto (.newThread log/subscription-thread-factory
                     (fn []
                       (let [thread (Thread/currentThread)]
@@ -160,11 +160,11 @@
                           (catch InterruptedException _)))))
     (.start)))
 
-(defrecord KafkaFileListCache [kafka-config
-                               ^KafkaProducer producer
-                               ^TopicPartition tp
-                               ^Duration poll-duration]
-  FileListCache
+(defrecord KafkaFileLog [kafka-config
+                         ^KafkaProducer producer
+                         ^TopicPartition tp
+                         ^Duration poll-duration]
+  FileLog
   (appendFileNotification [_ n]
     (let [fut (CompletableFuture.)]
       (.send producer (ProducerRecord. (.topic tp) nil (fl/file-notification->transit n))
@@ -182,7 +182,7 @@
   (close [_]
     (util/close producer)))
 
-(defrecord KafkaLog [^KafkaTxLog tx-log ^KafkaFileListCache file-list-cache]
+(defrecord KafkaLog [^KafkaTxLog tx-log ^KafkaFileLog file-log]
   Log
   (latestSubmittedTxId [_] (.latestSubmittedTxId tx-log))
 
@@ -190,12 +190,12 @@
   (readTxs [_ after-tx-id limit] (.readTxs tx-log after-tx-id limit))
   (subscribeTxs [_ after-tx-id subscriber] (.subscribeTxs tx-log after-tx-id subscriber))
 
-  (appendFileNotification [_ n] (.appendFileNotification file-list-cache n))
-  (subscribeFileNotifications [_ subscriber] (.subscribeFileNotifications file-list-cache subscriber))
+  (appendFileNotification [_ n] (.appendFileNotification file-log n))
+  (subscribeFileNotifications [_ subscriber] (.subscribeFileNotifications file-log subscriber))
 
   (close [_]
     (.close tx-log)
-    (.close file-list-cache)))
+    (.close file-log)))
 
 (defn ensure-topic-exists [kafka-config {:keys [topic-name create-topic?]}]
   (with-open [admin-client (AdminClient/create ^Map kafka-config)] 
@@ -258,7 +258,7 @@
                  tp
                  poll-duration)))
 
-(defn- open-file-list-cache [^Kafka$Factory factory kafka-config]
+(defn- open-file-log [^Kafka$Factory factory kafka-config]
   (let [topic-name (.getFilesTopic factory)
         poll-duration (.getFilePollDuration factory)
         tp (TopicPartition. topic-name 0)]
@@ -266,7 +266,7 @@
                          {:topic-name topic-name
                           :create-topic? (.getAutoCreateTopics factory)})
 
-    (KafkaFileListCache. kafka-config (->producer kafka-config) tp poll-duration)))
+    (KafkaFileLog. kafka-config (->producer kafka-config) tp poll-duration)))
 
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
 (defn open-log [^Kafka$Factory factory]
@@ -275,5 +275,5 @@
                                       :properties-map (.getPropertiesMap factory)})]
 
     (util/with-close-on-catch [tx-log (open-tx-log factory kafka-config)
-                               file-list-cache (open-file-list-cache factory kafka-config)]
-      (KafkaLog. tx-log file-list-cache))))
+                               file-log (open-file-log factory kafka-config)]
+      (KafkaLog. tx-log file-log))))

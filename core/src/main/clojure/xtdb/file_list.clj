@@ -3,10 +3,10 @@
             [xtdb.util :as util])
   (:import [java.io ByteArrayInputStream ByteArrayOutputStream]
            [java.nio.file Path]
-           (xtdb.api.log FileListCache$Notification)))
+           (xtdb.api.log FileLog$Notification)))
 
 (defrecord FileNotification [added deleted]
-  FileListCache$Notification)
+  FileLog$Notification)
 
 ;; used from Kotlin
 #_{:clj-kondo/ignore [:clojure-lsp/unused-public-var]}
