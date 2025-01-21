@@ -1,9 +1,15 @@
 (ns xtdb.file-list
-  (:require [cognitect.transit :as transit]
+  (:require [clojure.tools.logging :as log]
+            [cognitect.transit :as transit]
+            [integrant.core :as ig]
             [xtdb.util :as util])
   (:import [java.io ByteArrayInputStream ByteArrayOutputStream]
+           java.lang.AutoCloseable
            [java.nio.file Path]
-           (xtdb.api.log FileLog$Notification)))
+           [java.util.concurrent ConcurrentHashMap]
+           java.util.Map
+           (xtdb.api.log FileLog FileLog$Notification FileLog$Subscriber)
+           xtdb.IBufferPool))
 
 (defrecord FileNotification [added deleted]
   FileLog$Notification)
@@ -168,31 +174,86 @@
         (completed-ln-group? file-store-state file) (-> (mark-ln-group-live file)
                                                         (supersede-lnm1-files file))))))
 
-(defn apply-file-notification [file-store-state file-name]
+(defn apply-file [file-store-state file-name]
   (let [file (-> (parse-trie-file-path file-name)
                  (update :part vec))]
     (cond-> file-store-state
       (not (superseded-file? file-store-state file)) (conj-file file))))
 
-(defn current-trie-files [file-names]
-  (->> (sort file-names)
-       (reduce apply-file-notification {})
-       (into [] (comp (mapcat val)
-                      (filter #(= (:state %) :live))))
-       (sort-by (juxt (comp - :level) :part :next-row))
-       #_(#(doto % clojure.pprint/pprint))
-       (mapv :file-path)))
+(defn current-trie-files
+  ([{:keys [file-list-state]} table-name]
+   (current-trie-files (get file-list-state table-name)))
+  ([file-list-state]
+   (->> file-list-state
+        (into [] (comp (mapcat val)
+                       (filter #(= (:state %) :live))))
+        (sort-by (juxt (comp - :level) :part :next-row))
+        #_(#(doto % clojure.pprint/pprint))
+        (mapv :file-path))))
+
+(defn apply-notification [{:keys [^Map file-list-state]} {:keys [added]}]
+  (let [file-paths (for [{:keys [k size]} added
+                         :let [parts (mapv str k)]
+                         :when (= 4 (count parts))
+                         :let [[tables-str table-name meta-str trie-key] parts]
+                         :when (and (= "tables" tables-str)
+                                    (= "meta" meta-str))]
+
+                     {:trie-key trie-key, :table-name table-name, :size size})]
+
+    (doseq [[table-name files-for-table] (group-by :table-name file-paths)]
+            (.compute file-list-state table-name
+                      (fn [_table-name fl-state]
+                        (reduce apply-file (or fl-state {}) (map (comp util/->path :trie-key) files-for-table)))))))
+
 
 (comment
-  (current-trie-files [(util/->path "log-l00-fr00-nr12e-rs20.arrow")
-                       (util/->path "log-l00-fr12e-nr130-rs2.arrow")
-                       (util/->path "log-l01-fr00-nr12e-rs20.arrow")
-                       (util/->path "log-l01-fr00-nr130-rs22.arrow")
-                       (util/->path "log-l02-p0-nr130.arrow")
-                       (util/->path "log-l02-p1-nr130.arrow")
-                       (util/->path "log-l02-p3-nr130.arrow")
-                       (util/->path "log-l02-p2-nr130.arrow")
-                       (util/->path "log-l03-p21-nr130.arrow")
-                       (util/->path "log-l03-p22-nr130.arrow")
-                       (util/->path "log-l03-p23-nr130.arrow")
-                       (util/->path "log-l03-p20-nr130.arrow")]))
+  (-> (doto (->FileList (ConcurrentHashMap.) nil)
+        (apply-notification
+         (->FileNotification
+          (for [f ["log-l00-fr00-nr12e-rs20"
+                   "log-l00-fr12e-nr130-rs2"
+                   "log-l01-fr00-nr12e-rs20"
+                   "log-l01-fr00-nr130-rs22"
+                   "log-l02-p0-nr130"
+                   "log-l02-p1-nr130"
+                   "log-l02-p3-nr130"
+                   "log-l02-p2-nr130"
+                   "log-l03-p21-nr130"
+                   "log-l03-p22-nr130"
+                   "log-l03-p23-nr130"
+                   "log-l03-p20-nr130"]]
+            {:k (xtdb.trie/->table-meta-file-path (util/table-name->table-path "foo") f), :size 0})
+          [])))
+      (current-trie-files "foo")
+      (clojure.pprint/pprint)))
+
+(defrecord FileList [file-list-state subscription]
+  AutoCloseable
+  (close [_this]
+    (util/close subscription)))
+
+(defmethod ig/prep-key :xtdb/file-list [_ _opts]
+  {:file-log (ig/ref :xtdb/log)
+   :buffer-pool (ig/ref :xtdb/buffer-pool)})
+
+(defmethod ig/init-key :xtdb/file-list [_ {:keys [^FileLog file-log ^IBufferPool buffer-pool]}]
+
+  (let [file-list (->FileList (ConcurrentHashMap.) nil)
+        subscription (.subscribeFileNotifications file-log
+                                                  (reify FileLog$Subscriber
+                                                    (accept [_ notification]
+                                                      (clojure.pprint/pprint notification)
+                                                      (log/trace "Received file notification:" notification)
+                                                      (apply-notification file-list notification))))]
+
+    (log/trace "Subscribed to file notifications")
+    (apply-notification file-list {:added (.listAllObjects buffer-pool)})
+
+    (assoc file-list :subscription subscription)))
+
+(defmethod ig/halt-key! :xtdb/file-list [_ file-list]
+  (util/close file-list))
+
+;;mock buffer pool which lists some test objects
+;;mock file-log use solo one, call append with some test objects/notifs

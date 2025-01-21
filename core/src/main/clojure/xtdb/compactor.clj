@@ -197,7 +197,7 @@
 
 (defn compaction-jobs [meta-file-names opts]
   (let [fl-state (->> (sort meta-file-names)
-                      (reduce fl/apply-file-notification {}))]
+                      (reduce fl/apply-file {}))]
     (concat (when-let [job (l0->l1-compaction-job fl-state opts)]
               [job])
             (l1p-compaction-jobs fl-state opts))))

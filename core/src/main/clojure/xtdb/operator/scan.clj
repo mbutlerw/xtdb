@@ -376,9 +376,10 @@
   (merge opts
          {:allocator (ig/ref :xtdb/allocator)
           :metadata-mgr (ig/ref ::meta/metadata-manager)
-          :buffer-pool (ig/ref :xtdb/buffer-pool)}))
+          :buffer-pool (ig/ref :xtdb/buffer-pool)
+          :file-list (ig/ref :xtdb/file-list)}))
 
-(defmethod ig/init-key ::scan-emitter [_ {:keys [^IMetadataManager metadata-mgr, ^IBufferPool buffer-pool, ^BufferAllocator allocator]}]
+(defmethod ig/init-key ::scan-emitter [_ {:keys [^IMetadataManager metadata-mgr, ^IBufferPool buffer-pool, ^BufferAllocator allocator, file-list]}]
   (let [table->template-rel+trie (info-schema/table->template-rel+tries allocator)]
     (reify IScanEmitter
       (close [_] (->> table->template-rel+trie vals (map first) util/close))
@@ -457,8 +458,7 @@
                                                        (or fvt [:at [:now :now]]))))
                                ^ILiveTableWatermark live-table-wm (some-> (.liveIndex watermark) (.liveTable table-name))
                                table-path (util/table-name->table-path table-name)
-                               current-meta-files (->> (trie/list-meta-files buffer-pool table-path)
-                                                       (fl/current-trie-files))
+                               current-meta-files (fl/current-trie-files file-list table-name)
                                temporal-bounds (->temporal-bounds args scan-opts snapshot-time)]
                            (util/with-open [iid-arrow-buf (when iid-bb (util/->arrow-buf-view allocator iid-bb))]
                              (let [merge-tasks (util/with-open [table-metadatas (LinkedList.)]

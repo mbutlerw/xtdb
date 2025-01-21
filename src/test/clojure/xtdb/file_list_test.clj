@@ -1,8 +1,11 @@
 (ns xtdb.file-list-test
   (:require [clojure.test :as t]
+            [integrant.core :as ig]
             [xtdb.file-list :as fl]
             [xtdb.trie :as trie]
-            [xtdb.util :as util]))
+            [xtdb.util :as util])
+  (:import xtdb.api.log.FileLog
+           xtdb.IBufferPool))
 
 (t/deftest parses-trie-paths
   (letfn [(parse [trie-key]
@@ -89,3 +92,52 @@
                    [3 [1 0] 2] [3 [1 2] 2] [3 [1 3] 2] ; L2 path 1 not covered yet, missing [1 1]
                    [4 [0 1 0] 2] [4 [0 1 1] 2] [4 [0 1 2] 2] [4 [0 1 3] 2]]))
             "L4 covers L3 path [0 1]"))))
+
+(def files
+  (for [f ["log-l00-fr00-nr12e-rs20"
+           "log-l00-fr12e-nr130-rs2"
+           "log-l01-fr00-nr12e-rs20"
+           "log-l01-fr00-nr130-rs22"
+           "log-l02-p0-nr130"
+           "log-l02-p1-nr130"
+           "log-l02-p3-nr130"
+           "log-l02-p2-nr130"
+           "log-l03-p21-nr130"
+           "log-l03-p22-nr130"
+           "log-l03-p23-nr130"
+           "log-l03-p20-nr130"]]
+    {:k (xtdb.trie/->table-meta-file-path (util/table-name->table-path "foo") f), :size 0}))
+
+(t/deftest test-file-list
+  (t/testing "test existing files from buffer pool"
+    (let [file-list (ig/init-key
+                     :xtdb/file-list
+                     {:file-log FileLog/SOLO,
+                      :buffer-pool (reify IBufferPool (listAllObjects [_] files))})]
+
+      (t/is (= ["log-l03-p20-nr130.arrow"
+                "log-l03-p21-nr130.arrow"
+                "log-l03-p22-nr130.arrow"
+                "log-l03-p23-nr130.arrow"
+                "log-l02-p0-nr130.arrow"
+                "log-l02-p1-nr130.arrow"
+                "log-l02-p3-nr130.arrow"]
+               (mapv str (fl/current-trie-files file-list "foo"))))))
+
+  (t/testing "test files notifications from file-log"
+    (let [file-log FileLog/SOLO
+          file-list (ig/init-key
+                     :xtdb/file-list
+                     {:file-log file-log,
+                      :buffer-pool (reify IBufferPool (listAllObjects [_] []))})]
+
+      (.appendFileNotification file-log (fl/->FileNotification files []))
+
+      (t/is (= ["log-l03-p20-nr130.arrow"
+                "log-l03-p21-nr130.arrow"
+                "log-l03-p22-nr130.arrow"
+                "log-l03-p23-nr130.arrow"
+                "log-l02-p0-nr130.arrow"
+                "log-l02-p1-nr130.arrow"
+                "log-l02-p3-nr130.arrow"]
+               (mapv str (fl/current-trie-files file-list "foo")))))))

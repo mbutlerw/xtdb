@@ -228,6 +228,7 @@
          :xtdb/authn (.getAuthn opts)
 
          :xtdb/log (.getTxLog opts)
+         :xtdb/file-list {}
          :xtdb/buffer-pool (.getStorage opts)
          :xtdb.indexer/live-index (.getIndexer opts)
          :xtdb/modules (.getModules opts)
