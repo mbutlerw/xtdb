@@ -133,11 +133,6 @@
     (.flip bb)
     ba))
 
-(def ^java.util.Comparator bytes-comparator
-  (reify Comparator
-    (compare [_ l r]
-      (Arrays/compareUnsigned ^bytes l ^bytes r))))
-
 (def ^:private ^java.lang.ThreadLocal !msg-digest
   (ThreadLocal/withInitial
    (fn []
