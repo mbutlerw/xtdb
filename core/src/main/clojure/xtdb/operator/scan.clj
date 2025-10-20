@@ -305,3 +305,5 @@
 (defmethod lp/emit-expr :scan [scan-expr {:keys [^IScanEmitter scan-emitter db-cat scan-fields, param-fields]}]
   (assert db-cat)
   (.emitScan scan-emitter db-cat scan-expr scan-fields param-fields))
+
+(def test 123)
