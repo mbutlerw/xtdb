@@ -279,10 +279,9 @@
     (sort-by :sum > rows)))
 
 (defn profile
-  [node profile-id suite]
+  [node profile-id iterations suite]
   (with-open [conn (get-conn node)]
-    (let [iterations 10
-          _throwaway (doseq [{:keys [f]} suite]
+    (let [_throwaway (doseq [{:keys [f]} suite]
                        (f conn))
           [_ pstats] (tufte/profiled
                       {}
@@ -461,17 +460,17 @@
             :stage :profile-global-queries
             :f (fn [{:keys [node !state]}]
                  (let [{:keys [active-users biggest-feed]} @!state]
-                   (profile node :global (benchmarks-queries active-users biggest-feed))))}
+                   (profile node :global 10 (benchmarks-queries active-users biggest-feed))))}
            {:t :call
             :stage :profile-max-user
             :f (fn [{:keys [node !state]}]
                  (let [{:keys [max-user]} @!state]
-                   (profile node :max-user (user-specific-benchmarks-queries max-user))))}
+                   (profile node :max-user 10 (user-specific-benchmarks-queries max-user))))}
            {:t :call
             :stage :profile-mean-user
             :f (fn [{:keys [node !state]}]
                  (let [{:keys [mean-user]} @!state]
-                   (profile node :mean-user (user-specific-benchmarks-queries mean-user))))}
+                   (profile node :mean-user 50 (user-specific-benchmarks-queries mean-user))))}
            {:t :call
             :stage :inspect
             :f (fn [{:keys [node !state]}]
@@ -504,11 +503,11 @@
               active-users (get-active-users conn rnd scale)
               biggest-feed (get-biggest-feed conn rnd)]
           (println "Profile Global")
-          (profile node :global (benchmarks-queries active-users biggest-feed))
+          (profile node :global 10 (benchmarks-queries active-users biggest-feed))
           (println "Profile Max User")
-          (profile node :max-user (user-specific-benchmarks-queries max-user))
+          (profile node :max-user 10 (user-specific-benchmarks-queries max-user))
           (println "Profile Mean User")
-          (profile node :mean-user (user-specific-benchmarks-queries mean-user))
+          (profile node :mean-user 50 (user-specific-benchmarks-queries mean-user))
           (println "Inspect")
           (inspect node {:max-user max-user
                          :active-users active-users}))))
