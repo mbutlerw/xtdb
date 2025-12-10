@@ -65,6 +65,9 @@
 
   (reset->l0! [trie-cat]
     "DANGER: resets the trie-catalog back to L0,
+     use if compaction has gone awry, and you want to completely recompact.")
+  (reset->l2h! [trie-cat]
+    "DANGER: resets the trie-catalog back to L2h,
      use if compaction has gone awry, and you want to completely recompact."))
 
 (def ^:const branch-factor 4)
@@ -315,8 +318,7 @@
   (for [[k tries] tries
         :let [[level recency _part] k]
         :when (and (> level 2) recency
-                   (neg? (compare #xt/date "2025-09-01" recency))
-                   (neg? (compare recency #xt/date "2025-11-01")))
+                   (neg? (compare recency #xt/date "2025-12-01")))
         :let [{:keys [live nascent garbage]} tries
               tries (concat live nascent garbage)]
         {:keys [trie-key]} tries]
@@ -339,17 +341,28 @@
 ;; - L2H - N partitions. preserve outside this recency range, update within
 ;; - set in-range L2H files to live where data-file-size > file-size-target
 
-(defn reset->l2h [{:keys [tries]}]
-  ;; combine live & garbage (there should be no nascent)
-  (let [{:keys [live garbage]} (get tries [0 nil []])
-        l0-tries (concat live garbage)
-        live-tries (->> l0-tries
-                        (sort-by :block-idx #(compare %2 %1))
-                        (map #(assoc % :state :live)))]
-
-    {:tries {[0 nil []] {:max-block-idx (:block-idx (first live-tries))
-                         :live (doall live-tries)}}
-     :l1h-recencies {}}))
+(defn reset->l2h [{:keys [tries l1h-recencies]} file-size-target]
+  {:tries
+   (->> tries
+        (into {} (keep (fn [[[level recency part :as k] tries]]
+                         (cond (and (> level 2)
+                                    recency
+                                    (neg? (compare recency #xt/date "2025-12-01")))
+                               nil
+                               (and (= level 2)
+                                    recency
+                                    (neg? (compare recency #xt/date "2025-12-01")))
+                               [k
+                                (let [{:keys [live garbage]} tries
+                                      {full true partial false} (group-by #(>= (:data-file-size %) file-size-target) garbage)]
+                                  {:live (concat live (map #(-> %
+                                                                (assoc :state :live)
+                                                                (dissoc :garbage-as-of)) full))
+                                   :garbage partial})]
+                               
+                               :else
+                               [k tries])))))
+   :l1h-recencies l1h-recencies})
 
 (defrecord TrieCatalog [^Map !table-cats, ^long file-size-target]
   xtdb.trie.TrieCatalog
@@ -394,7 +407,12 @@
     (doseq [table (.getTables this)]
       (.compute !table-cats table
                 (fn [_table table-cat]
-                  (reset->l0 table-cat))))))
+                  (reset->l0 table-cat)))))
+  (reset->l2h! [this]
+    (doseq [table (.getTables this)]
+      (.compute !table-cats table
+                (fn [_table table-cat]
+                  (reset->l2h table-cat file-size-target))))))
 
 (defmethod ig/expand-key :xtdb/trie-catalog [k opts]
   {k (into {:buffer-pool (ig/ref :xtdb/buffer-pool)

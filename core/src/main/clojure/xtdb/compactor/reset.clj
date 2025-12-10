@@ -54,7 +54,7 @@
             (do
               (log/info "Resetting compaction...")
 
-              (trie-cat/reset->l0! trie-cat)
+              (trie-cat/reset->l2h! trie-cat)
               (xt-log/send-flush-block-msg! db)
               (xt-log/sync-db db #xt/duration "PT5M")
               (log/info "Reset complete. Deleting compacted files...")
