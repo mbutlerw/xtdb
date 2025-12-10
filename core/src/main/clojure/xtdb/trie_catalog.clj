@@ -40,8 +40,7 @@
 
   ;; L3+ have both recency (if applicable) and part
   ;; if they have a recency they'll have one fewer part element
-  [3 recency part] {:live () :nascent () :garbage ()}
-  }
+  [3 recency part] {:live () :nascent () :garbage ()}}
 
 ;; The journey of a row:
 ;; 1. written to L0 by the indexer
@@ -312,7 +311,35 @@
         {:keys [trie-key]} tries]
     trie-key))
 
+(defn compacted-trie-keys-syn-l3h [{:keys [tries]}]
+  (for [[k tries] tries
+        :let [[level recency _part] k]
+        :when (and (> level 2) recency
+                   (neg? (compare #xt/date "2025-09-01" recency))
+                   (neg? (compare recency #xt/date "2025-11-01")))
+        :let [{:keys [live nascent garbage]} tries
+              tries (concat live nascent garbage)]
+        {:keys [trie-key]} tries]
+    trie-key))
+
 (defn reset->l0 [{:keys [tries]}]
+  ;; combine live & garbage (there should be no nascent)
+  (let [{:keys [live garbage]} (get tries [0 nil []])
+        l0-tries (concat live garbage)
+        live-tries (->> l0-tries
+                        (sort-by :block-idx #(compare %2 %1))
+                        (map #(assoc % :state :live)))]
+
+    {:tries {[0 nil []] {:max-block-idx (:block-idx (first live-tries))
+                         :live (doall live-tries)}}
+     :l1h-recencies {}}))
+
+;; - remove L3H and above within this recency range
+;; - preserve :l1h-recencies rather than clearing it
+;; - L2H - N partitions. preserve outside this recency range, update within
+;; - set in-range L2H files to live where data-file-size > file-size-target
+
+(defn reset->l2h [{:keys [tries]}]
   ;; combine live & garbage (there should be no nascent)
   (let [{:keys [live garbage]} (get tries [0 nil []])
         l0-tries (concat live garbage)
@@ -403,7 +430,6 @@
                      (-> {:garbage garbage :live live :nascent nascent}
                          (update-vals (fn [trie-list] (sort-by :block-idx #(compare %2 %1) trie-list)))
                          (assoc :max-block-idx max-block-idx)))))
-
 
 (defn trie-catalog-init [table->table-block]
   ;; We need to check one trie-details message from every table as table block files might come from different nodes. #4664
