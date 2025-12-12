@@ -14,6 +14,7 @@
             [xtdb.types :as types]
             [xtdb.util :as util]
             [clojure.edn :as edn]
+            [clojure.pprint :as pp]
             [clojure.data :as data]
             [clojure.set :as set])
   (:import [java.nio.file Path]
@@ -317,21 +318,59 @@
 
 ; TODO:
 ;; Goal
-(let [list-of-l2s (->> new-live)
+#_(let [list-of-l2s (->> new-live)
       (sort-by :block-idx :list)]
   (->> (for [deleted deleted-tries]
          (set (get-prev-n delete)))
        (apply set/intersection)
        (empty?)))
+#_(->> deleted-tries
+       (mapcat (fn [[k vs]] (map #(do [k %]) vs)))
+       (group-by first)
+       (map (fn [[k vs]]
+              (let [tries-br (->> vs
+                                  (map (comp :trie-key second))
+                                  sort
+                                  (map trie/parse-trie-key)
+                                  (sort-by :block-idx)
+                                  (group-by :recency))
+                    l2-eq-tries (update-vals tries-br
+                                             (fn [tfr]
+                                               (for [trie tfr
+                                                     _n (range (*  (- (:level trie) 2) 4))]
+                                                 (assoc trie :level 2))))]
+                [k tries-br #_l2-eq-tries]))))
+(comment
+  (let [trie-fx (fn [tries]
+                  (->> tries
+                       (mapcat (fn [[k vs]] (map #(do [k %]) vs)))
+                       (group-by first)
+                       (map (fn [[k vs]] [k (->> vs
+                                                 (map (comp :trie-key second))
+                                                 sort
+                                                 (map trie/parse-trie-key)
+                                                 (sort-by :block-idx)
+                                                 (group-by :recency))]))
+                       (into {})))
+        table->recency->new-tries (trie-fx new-live)
+        
+        table->recency->deleted-tries (trie-fx deleted-tries)]
 
-(let [table->recency->new-trie
-      (->> new-live
-           (mapcat (fn [[k vs]] (map #(do [k %]) vs)))
-           (group-by first)
-           (map (fn [[k vs]] [k (->> vs
-                                     (map (comp :trie-key second))
-                                     sort
-                                     (map trie/parse-trie-key)
-                                     (group-by :recency))])))]
-  (->> deleted-tries)
-  (for [[table recency]]))
+    
+    #_(pp/pprint table->recency->new-tries)
+    (pp/pprint
+       (for [[table recencies] table->recency->deleted-tries
+             [recency del-tries] recencies]
+         (let [new-tries (get-in table->recency->new-tries [table recency])]
+           
+           [table recency
+            new-tries
+            del-tries
+            (count new-tries)
+            (count del-tries)])))
+    #_(pp/pprint
+     (for [[table recencies] table->recency->deleted-tries
+           [recency del-tries] recencies]
+       (let [new-tries (get-in table->recency->new-tries [table recency])]
+         
+         [table recency (count new-tries) (count del-tries)])))))
