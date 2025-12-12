@@ -12,7 +12,10 @@
             [xtdb.trie :as trie]
             [xtdb.trie-catalog :as trie-cat]
             [xtdb.types :as types]
-            [xtdb.util :as util])
+            [xtdb.util :as util]
+            [clojure.edn :as edn]
+            [clojure.data :as data]
+            [clojure.set :as set])
   (:import [java.nio.file Path]
            java.time.Duration
            [java.util List]
@@ -100,7 +103,6 @@
       (prn !q)
       (time (tu/query-ra @!q node)))))
 
-
 (defn write-arrow-file [^Path path, ^List data]
   (with-open [al (RootAllocator.)
               ch (util/->file-channel path #{:write :create})
@@ -124,11 +126,11 @@
              :else v))))))
 
   ([^Path path, ^long page-idx]
-    (with-open [al (RootAllocator.)
-                ldr (Relation/loader al path)
-                rel (Relation. al (.getSchema ldr))]
-      (.loadPage ldr page-idx rel)
-      (util/->clj (.getAsMaps rel)))))
+   (with-open [al (RootAllocator.)
+               ldr (Relation/loader al path)
+               rel (Relation. al (.getSchema ldr))]
+     (.loadPage ldr page-idx rel)
+     (util/->clj (.getAsMaps rel)))))
 
 (comment
   (write-arrow-file (util/->path "/tmp/test.arrow")
@@ -189,11 +191,11 @@
   (with-open [al (RootAllocator.)
               r (Relation/openFromArrowStream al (.getPayload (Log$Message/parse ba)))]
     (vec
-      (for [op (-> r .getAsMaps first :tx-ops)]
-        (let [{:keys [query args]} (.getValue op)]
-          (with-open [r2 (Relation/openFromArrowStream al args)]
-            {:query query
-             :args (.getAsMaps r2)}))))))
+     (for [op (-> r .getAsMaps first :tx-ops)]
+       (let [{:keys [query args]} (.getValue op)]
+         (with-open [r2 (Relation/openFromArrowStream al args)]
+           {:query query
+            :args (.getAsMaps r2)}))))))
 
 (comment
   (require '[clojure.data.json :as json])
@@ -209,4 +211,127 @@
       byte-array
       byte-array->txs))
 
+(defn read-diff [file-path]
+  (with-open [r (io/reader file-path)
+              pbr (java.io.PushbackReader. r)]
+    (edn/read {:readers *data-readers*} pbr)))
 
+(def deleted-files (read-diff "./deleted-files.stg.edn"))
+(def trie-diff (read-diff "./trie-diff.stg.edn"))
+
+; Are there no duplicate live or garbate tries?
+(reduce #(and %1 %2)
+        (for [[table trie-diffs] trie-diff
+              {:keys [garbage live]} trie-diffs]
+          (and
+           (let [{:keys [before after]} garbage]
+             (and (= (count (set before)) (count before))
+                  (= (count (set after)) (count after))))
+           (let [{:keys [before after]} live]
+             (and (= (count (set before)) (count before))
+                  (= (count (set after)) (count after)))))))
+; => true
+; Therefore we can put things in sets
+; This means we don't have to reason about things positionally (as they're originally lists)
+
+; Get the deleted tries
+(def deleted-tries
+  (for [[table trie-diffs] trie-diff
+        {{:keys [before after]} :live} trie-diffs
+        :let [before (set before)
+              after (set after)
+              deleted (set/difference before after)]
+        :when (not (empty? deleted))]
+    [table deleted]))
+
+; delted-tries should equal deleted-files
+(= (->> deleted-tries
+        (mapcat (fn [[k vs]]
+                  (for [v vs]
+                    [k (:trie-key v)])))
+        (sort-by (juxt (comp str first) second)))
+   (->> (:trie-keys deleted-files)
+        (sort-by (juxt (comp str first) second))))
+; => true
+
+; What was move out of garbage?
+(def not-garbage
+  (for [[table trie-diffs] trie-diff
+        {{:keys [before after]} :garbage} trie-diffs
+        :let [before (set before)
+              after (set after)
+              not-garbage (set/difference before after)]
+        :when (not (empty? not-garbage))]
+    [table not-garbage]))
+; This is a combination of:
+; - Previoiusly "covered" by the above deleted tries
+; - Files erroniously marked as garbage without an l3
+
+; There should only be l02h files here
+(->> not-garbage
+     (mapcat (fn [[_ tries]] (map :trie-key tries)))
+     (map trie/parse-trie-key)
+     (remove #(and (= (:level %) 2) (:recency %)))
+     (empty?))
+; => true
+
+; There should be a multipe of 4 of these files per table
+(reduce #(and %1 %2)
+        (for [[table tries] not-garbage]
+          (zero? (mod (count tries) 4))))
+; => true
+
+; Which files have now been marked as live
+(def new-live
+  (for [[table trie-diffs] trie-diff
+        {{:keys [before after]} :live} trie-diffs
+        :let [before (set before)
+              after (set after)
+              new-live (set/difference after before)]
+        :when (not (empty? new-live))]
+    [table new-live]))
+
+; This should be an exact match for "not-garbage"
+(= not-garbage new-live)
+; => true
+
+; All new live files are "full"
+(reduce #(and %1 %2)
+        (for [[table tries] new-live
+              {:keys [data-file-size]} tries]
+          (>= data-file-size trie-cat/*file-size-target*)))
+; => true
+
+; What is garbage now that wasn't before
+(def deleted-garbage
+  (for [[table trie-diffs] trie-diff
+        {{:keys [before after]} :garbage} trie-diffs
+        :let [before (set before)
+              after (set after)
+              deleted-garbage (set/difference after before)]
+        :when (not (empty? deleted-garbage))]
+    [table deleted-garbage]))
+; We expect nothing
+(empty? deleted-garbage)
+; => true
+
+; TODO:
+;; Goal
+(let [list-of-l2s (->> new-live)
+      (sort-by :block-idx :list)]
+  (->> (for [deleted deleted-tries]
+         (set (get-prev-n delete)))
+       (apply set/intersection)
+       (empty?)))
+
+(let [table->recency->new-trie
+      (->> new-live
+           (mapcat (fn [[k vs]] (map #(do [k %]) vs)))
+           (group-by first)
+           (map (fn [[k vs]] [k (->> vs
+                                     (map (comp :trie-key second))
+                                     sort
+                                     (map trie/parse-trie-key)
+                                     (group-by :recency))])))]
+  (->> deleted-tries)
+  (for [[table recency]]))
