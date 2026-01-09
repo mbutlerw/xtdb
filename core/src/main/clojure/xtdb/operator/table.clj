@@ -16,13 +16,16 @@
            (xtdb ICursor)
            (xtdb.arrow ListExpression Relation RelationReader RelationWriter Vector VectorWriter)))
 
+(s/def ::output-cols (s/coll-of ::lp/column :kind vector?))
+(s/def ::rows (s/coll-of (s/or :map (s/map-of simple-ident? any?)
+                               :param ::lp/param)))
+(s/def ::column (s/map-of ::lp/column any?, :count 1))
+(s/def ::param ::lp/param)
+
 (defmethod lp/ra-expr :table [_]
   (s/cat :op #{:table}
-         :explicit-col-names (s/? (s/coll-of ::lp/column :kind vector?))
-         :table (s/or :rows (s/coll-of (s/or :map (s/map-of simple-ident? any?)
-                                             :param ::lp/param))
-                      :column (s/map-of ::lp/column any?, :count 1)
-                      :param ::lp/param)))
+         :opts (s/and (s/keys :opt-un [::output-cols ::rows ::column ::param])
+                      #(= 1 (count (select-keys % [:rows :column :param]))))))
 
 (set! *unchecked-math* :warn-on-boxed)
 
@@ -45,12 +48,12 @@
   (close [_]
     (util/close out-rel)))
 
-(defn- restrict-cols [fields {:keys [explicit-col-names]}]
+(defn- restrict-cols [fields {:keys [output-cols]}]
   (cond-> fields
-    explicit-col-names (-> (->> (merge (zipmap explicit-col-names (repeat types/null-field))))
-                           (select-keys explicit-col-names))))
+    output-cols (-> (->> (merge (zipmap output-cols (repeat types/null-field))))
+                    (select-keys output-cols))))
 
-(defn- emit-rows-table [rows table-expr {:keys [param-fields schema] :as opts}]
+(defn- emit-rows-table [rows table-opts {:keys [param-fields schema] :as emit-opts}]
   (let [param-types (update-vals param-fields types/->type)
         field-sets (HashMap.)
         out-rows (->> rows
@@ -80,7 +83,7 @@
                                                               (map (fn [[k v]]
                                                                      (let [k (symbol k)
                                                                            expr (try
-                                                                                  (expr/form->expr v (assoc opts :param-types param-types))
+                                                                                  (expr/form->expr v (assoc emit-opts :param-types param-types))
                                                                                   (catch Exception e
                                                                                     (clojure.tools.logging/warn "fail" {:expr v, :param-types param-types})
                                                                                     (throw e)))
@@ -100,7 +103,7 @@
 
                                                                          ;; HACK: this is quite heavyweight to calculate a single value -
                                                                          ;; the EE doesn't yet have an efficient means to do so...
-                                                                         (let [input-types (assoc opts :param-types param-types)
+                                                                         (let [input-types (assoc emit-opts :param-types param-types)
                                                                                expr (expr/form->expr v input-types)
                                                                                projection-spec (expr/->expression-projection-spec "_scalar" expr input-types)]
                                                                            (.add field-set (.getField projection-spec))
@@ -123,7 +126,7 @@
                                                     (.add !v-types types/null-field))
                                                   (-> (apply types/merge-fields !v-types)
                                                       (types/field-with-name (str k))))))))
-                   (restrict-cols table-expr))]
+                   (restrict-cols table-opts))]
 
     {:fields fields
      :row-count row-count
@@ -136,15 +139,15 @@
 
                         out-rel))))}))
 
-(defn- emit-col-table [col-spec table-expr {:keys [param-fields schema] :as opts}]
+(defn- emit-col-table [col-spec table-opts {:keys [param-fields schema] :as emit-opts}]
   (let [[out-col v] (first col-spec)
         param-types (update-vals param-fields types/->type)
-        expr (expr/form->expr v (assoc opts :param-types param-types))
-        input-types (assoc opts :param-types param-types)
+        expr (expr/form->expr v (assoc emit-opts :param-types param-types))
+        input-types (assoc emit-opts :param-types param-types)
         {:keys [field ->list-expr]} (expr-list/compile-list-expr expr input-types)
         named-field (types/field-with-name field (str out-col))]
     {:fields (-> {(symbol (.getName named-field)) named-field}
-                 (restrict-cols table-expr))
+                 (restrict-cols table-opts))
      :->out-rel (fn [{:keys [^BufferAllocator allocator, ^RelationReader args]}]
                   (util/with-close-on-catch [out-vec (Vector/open allocator named-field)]
                     (let [^ListExpression list-expr (->list-expr schema args)]
@@ -152,7 +155,7 @@
                         (.writeTo list-expr out-vec 0 (.getSize list-expr)))
                       (Relation. allocator ^List (vector out-vec) (.getValueCount out-vec)))))}))
 
-(defn- emit-arg-table [param table-expr {:keys [param-fields]}]
+(defn- emit-arg-table [param table-opts {:keys [param-fields]}]
   (let [fields (-> (into {} (for [^Field field (-> (or (get param-fields param)
                                                        (throw (err/illegal-arg :unknown-table
                                                                                {::err/message "Table refers to unknown param"
@@ -172,7 +175,7 @@
                                   ^Field field (.getChildren el-leg)]
                               (MapEntry/create (symbol (.getName field)) field)))
 
-                   (restrict-cols table-expr))]
+                   (restrict-cols table-opts))]
 
     {:fields fields
      :->out-rel (fn [{:keys [^BufferAllocator allocator, ^RelationReader args]}]
@@ -189,16 +192,17 @@
                                             (.openSlice (.vectorFor el-struct-rdr k) allocator)))
                                (.getValueCount el-rdr))))}))
 
-(defmethod lp/emit-expr :table [{:keys [table] :as table-expr} opts]
-  (let [{:keys [fields ->out-rel row-count]} (zmatch table
-                                                     [:rows rows] (emit-rows-table rows table-expr opts)
-                                                     [:column col] (emit-col-table col table-expr opts)
-                                                     [:param param] (emit-arg-table param table-expr opts))]
+(defmethod lp/emit-expr :table [{:keys [opts]} emit-opts]
+  (let [{:keys [rows column param]} opts
+        {:keys [fields ->out-rel row-count]} (cond
+                                               rows (emit-rows-table rows opts emit-opts)
+                                               column (emit-col-table column opts emit-opts)
+                                               param (emit-arg-table param opts emit-opts))]
 
     {:op       :table
      :children []
      :fields   fields
      :stats    (when row-count {:row-count row-count})
-     :->cursor (fn [{:keys [allocator explain-analyze? tracer query-span] :as opts}]
-                 (cond-> (TableCursor. allocator (->out-rel opts))
+     :->cursor (fn [{:keys [allocator explain-analyze? tracer query-span] :as cursor-opts}]
+                 (cond-> (TableCursor. allocator (->out-rel cursor-opts))
                    (or explain-analyze? (and tracer query-span)) (ICursor/wrapTracing tracer query-span)))}))

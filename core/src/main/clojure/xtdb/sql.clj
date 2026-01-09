@@ -88,7 +88,7 @@
 (extend-protocol PlanRelation
   nil
   (plan-rel [_]
-    [:table [{}]]))
+    [:table {:rows [{}]}]))
 
 (defn- find-cols
   ([scope chain] (find-cols scope chain #{}))
@@ -469,9 +469,9 @@
 
   PlanRelation
   (plan-rel [_]
-    (as-> [:table {(-> (->col-sym (str unique-table-alias) (str unnest-col))
-                       (with-meta (meta unnest-col)))
-                   unnest-expr}]
+    (as-> [:table {:column {(-> (->col-sym (str unique-table-alias) (str unnest-col))
+                                (with-meta (meta unnest-col)))
+                            unnest-expr}}]
         plan
 
       (if ordinality-col
@@ -1930,7 +1930,7 @@
           expr (.accept (.expr ctx) (assoc this :scope nil))
 
           expr-sym (->col-sym (str "_qc_expr_" (swap! !id-count inc)))
-          query-plan (->QueryExpr [:table {expr-sym expr}]
+          query-plan (->QueryExpr [:table {:column {expr-sym expr}}]
                                   [expr-sym])]
 
       (.put !subqs sq-sym (into {:sq-type :quantified-comparison
@@ -2542,8 +2542,7 @@
     (let [unique-table-alias (symbol (str "xt.values." (swap! !id-count inc)))
           {:keys [rows col-syms]} (.accept ctx (->TableRowsVisitor env scope out-col-syms))]
       (->QueryExpr [:rename {:prefix unique-table-alias}
-                    [:table col-syms
-                     rows]]
+                    [:table {:output-cols col-syms, :rows rows}]]
 
                    (->> col-syms
                         (mapv #(->col-sym (str unique-table-alias) (str %)))))))
@@ -2555,8 +2554,7 @@
     (let [unique-table-alias (symbol (str "xt.values." (swap! !id-count inc)))
           {:keys [rows col-syms]} (.accept ctx (->TableRowsVisitor env scope out-col-syms))]
       (->QueryExpr [:rename {:prefix unique-table-alias}
-                    [:table col-syms
-                     rows]]
+                    [:table {:output-cols col-syms, :rows rows}]]
 
                    (->> col-syms
                         (mapv #(->col-sym (str unique-table-alias) (str %)))))))
@@ -2777,13 +2775,13 @@
           (into query-vars))))
 
   (visitShowSnapshotTokenStatement [_ _]
-    (->QueryExpr '[:table [snapshot_token]
-                   [{:snapshot_token (snapshot_token)}]]
+    (->QueryExpr '[:table {:output-cols [snapshot_token]
+                           :rows [{:snapshot_token (snapshot_token)}]}]
                  '[snapshot_token]))
 
   (visitShowClockTimeStatement [_ _]
-    (->QueryExpr '[:table [clock_time]
-                   [{:clock_time (current_timestamp)}]]
+    (->QueryExpr '[:table {:output-cols [clock_time]
+                           :rows [{:clock_time (current_timestamp)}]}]
                  '[clock_time]))
 
   (visitSettingDefaultSystemTime [_ ctx]
@@ -2989,7 +2987,7 @@
     (let [!subqs (HashMap.)
           predicate (.accept (.condition ctx)
                              (map->ExprPlanVisitor {:env env, :scope nil, :!subqs !subqs}))]
-      (->QueryExpr (-> [:table [{}]]
+      (->QueryExpr (-> [:table {:rows [{}]}]
                        (apply-sqs (not-empty (into {} !subqs)))
                        (wrap-predicates predicate))
                    [])))
@@ -2997,11 +2995,11 @@
   (visitShowVariableStatement [this ctx] (.accept (.showVariable ctx) this))
 
   (visitShowTransactionIsolationLevel [_ _]
-    (->QueryExpr [:table [{:transaction_isolation "read committed"}]]
+    (->QueryExpr [:table {:rows [{:transaction_isolation "read committed"}]}]
                  [(->col-sym 'transaction_isolation)]))
 
   (visitShowTimeZone [_ _]
-    (->QueryExpr [:table [{:timezone '(current-timezone)}]]
+    (->QueryExpr [:table {:rows [{:timezone '(current-timezone)}]}]
                  [(->col-sym 'timezone)]))
 
   (visitExecuteStatement [_ ctx]
@@ -3010,7 +3008,7 @@
                        (into [] (comp (map (partial accept-visitor (->ExprPlanVisitor env nil)))
                                       (map-indexed (fn [idx expr]
                                                      (MapEntry/create (symbol (str "?_" idx)) expr))))))]
-      (->QueryExpr [:table [(into {} arg-row)]]
+      (->QueryExpr [:table {:rows [(into {} arg-row)]}]
                    (vec (keys arg-row))))))
 
 (defn xform-table-info [table-info default-db]
