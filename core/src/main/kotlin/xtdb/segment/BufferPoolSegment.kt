@@ -57,6 +57,10 @@ class BufferPoolSegment(
 
         override fun testPage(leaf: ArrowHashTrie.Leaf) = pageIdxPredicate?.test(leaf.dataPageIndex) ?: true
 
+        override fun temporalMetadata(leaf: ArrowHashTrie.Leaf) = pageMetadata.temporalMetadata(leaf.dataPageIndex)
+
+        override fun recency(leaf: ArrowHashTrie.Leaf) = this@BufferPoolSegment.recency
+
         override fun close() = pageMetadata.close()
     }
 

@@ -259,6 +259,10 @@ private class LocalSegment(
 
         override fun testPage(leaf: ArrowHashTrie.Leaf) = true
 
+        override fun temporalMetadata(leaf: ArrowHashTrie.Leaf) = UNBOUND_TEMPORAL_METADATA
+
+        override fun recency(leaf: ArrowHashTrie.Leaf) = this@LocalSegment.recency
+
         override fun close() = pageMetadata.close()
     }
 

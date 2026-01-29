@@ -3,27 +3,65 @@ package xtdb.segment
 import com.carrotsearch.hppc.ObjectStack
 import kotlinx.coroutines.runBlocking
 import xtdb.segment.Segment.PageMeta
+import xtdb.segment.Segment.PageMeta.Companion.detachedPageMeta
 import xtdb.trie.DEFAULT_LEVEL_WIDTH
 import xtdb.trie.HashTrie
 import xtdb.trie.conjPath
-import xtdb.util.safeMap
-import xtdb.util.useAll
 import java.util.function.Predicate
 
 object MergePlanner {
-    private data class SegmentNode<L>(
-        val segMeta: Segment.Metadata<L>, val node: HashTrie.Node<L>
-    ) {
-        val children: List<SegmentNode<L>?>?
-            get() = node.hashChildren?.map { it?.let { SegmentNode(segMeta, it) } }
 
-        @Suppress("UNCHECKED_CAST")
-        val page get() = segMeta.page(node as L)
+    /**
+     * Lightweight snapshot of a trie structure extracted from segment metadata.
+     * Captures the trie shape and PageMeta at leaves, allowing metadata files
+     * to be closed immediately after extraction.
+     *
+     * Note: Path is not stored here - it's computed dynamically during traversal
+     * via conjPath() and tracked in WorkTask.
+     */
+    private sealed interface TrieSnapshot {
+        data class Branch(val children: List<TrieSnapshot?>) : TrieSnapshot
+        data class Leaf(val pageMeta: PageMeta<*>) : TrieSnapshot
     }
 
-    private fun <L> Segment.Metadata<L>.toSegmentNode() = trie.rootNode?.let { node -> SegmentNode(this, node) }
+    /**
+     * Extracts a lightweight TrieSnapshot from segment metadata.
+     * Creates DetachedPageMeta objects with all values pre-extracted, breaking
+     * the reference chain to Metadata and allowing it to be garbage collected.
+     *
+     * All metadata-dependent values (temporalMetadata, recency, testMetadata result)
+     * are extracted while metadata is still open.
+     */
+    private fun <L> extractSnapshotFromNode(seg: Segment<L>, segMeta: Segment.Metadata<L>, node: HashTrie.Node<L>): TrieSnapshot {
+        val children = node.hashChildren
+        return if (children != null) {
+            TrieSnapshot.Branch(
+                children.map { child -> child?.let { extractSnapshotFromNode(seg, segMeta, it) } }
+            )
+        } else {
+            @Suppress("UNCHECKED_CAST")
+            val leaf = node as L
+            // Create detached PageMeta with all values pre-extracted - no reference to metadata
+            val detachedMeta = detachedPageMeta(
+                page = seg.createPage(leaf),
+                temporalMetadata = segMeta.temporalMetadata(leaf),
+                recency = segMeta.recency(leaf),
+                testMetadataResult = segMeta.testPage(leaf)
+            )
+            TrieSnapshot.Leaf(detachedMeta)
+        }
+    }
 
-    private class WorkTask(val segNodes: List<SegmentNode<*>>, val path: ByteArray)
+    /**
+     * Extension function to extract snapshot from segment.
+     * Captures the type parameter L properly to avoid wildcard type issues.
+     */
+    private suspend fun <L> Segment<L>.extractSnapshot(): TrieSnapshot? =
+        openMetadata().use { segMeta ->
+            segMeta.trie.rootNode?.let { node -> extractSnapshotFromNode(this, segMeta, node) }
+        }
+
+    private class WorkTask(val snapshots: List<TrieSnapshot>, val path: ByteArray)
 
     @FunctionalInterface
     fun interface PagesFilter {
@@ -42,48 +80,56 @@ object MergePlanner {
         pathPred: Predicate<ByteArray>?,
         filterPages: PagesFilter = PagesFilter { it }
     ): List<MergeTask> {
-        segments
-            .filter {
-                val part = it.part
-                if (part == null || pathPred == null) true
-                else pathPred.test(part)
+        // Filter segments by partition and extract snapshots
+        val filteredSegments = segments.filter {
+            val part = it.part
+            if (part == null || pathPred == null) true
+            else pathPred.test(part)
+        }
+
+        // Extract snapshots from each segment, closing metadata immediately after
+        val snapshots = filteredSegments.mapNotNull { segment ->
+            segment.extractSnapshot()
+        }
+
+        if (snapshots.isEmpty()) return emptyList()
+
+        val result = mutableListOf<MergeTask>()
+        val stack = ObjectStack<WorkTask>()
+
+        stack.push(WorkTask(snapshots, ByteArray(0)))
+
+        while (!stack.isEmpty) {
+            val workTask = stack.pop()
+            val currentSnapshots = workTask.snapshots
+            if (pathPred != null && !pathPred.test(workTask.path)) continue
+
+            val nodeChildren = currentSnapshots.map { snapshot ->
+                snapshot to (snapshot as? TrieSnapshot.Branch)?.children
             }
-            .safeMap { it.openMetadata() }.useAll { segMetas ->
-                val result = mutableListOf<MergeTask>()
 
-                val initialSegNodes = segMetas.mapNotNull { it.toSegmentNode() }
-                if (initialSegNodes.isEmpty()) return emptyList()
-
-                val stack = ObjectStack<WorkTask>()
-
-                stack.push(WorkTask(initialSegNodes, ByteArray(0)))
-
-                while (!stack.isEmpty) {
-                    val workTask = stack.pop()
-                    val segNodes = workTask.segNodes
-                    if (pathPred != null && !pathPred.test(workTask.path)) continue
-
-                    val nodeChildren = segNodes.map { it to it.children }
-                    if (nodeChildren.any { (_, children) -> children != null }) {
-                        // do these in reverse order so that they're on the stack in path-prefix order
-                        for (bucketIdx in (0..<DEFAULT_LEVEL_WIDTH).reversed()) {
-                            val newSegNodes = nodeChildren.mapNotNull { (segNode, children) ->
-                                // children == null iff this is a leaf
-                                // children[bucketIdx] is null iff this is a branch but without any values in this bucket.
-                                if (children != null) children[bucketIdx] else segNode
-                            }
-
-                            if (newSegNodes.isNotEmpty())
-                                stack.push(WorkTask(newSegNodes, conjPath(workTask.path, bucketIdx.toByte())))
-                        }
-                    } else {
-                        filterPages.filterPages(segNodes.map { it.page })
-                            ?.takeIf { it.isNotEmpty() }
-                            ?.let { filteredPages -> result += MergeTask(filteredPages.map { it.page }, workTask.path) }
+            if (nodeChildren.any { (_, children) -> children != null }) {
+                // At least one snapshot is a branch - traverse children
+                // Do these in reverse order so they're on the stack in path-prefix order
+                for (bucketIdx in (0..<DEFAULT_LEVEL_WIDTH).reversed()) {
+                    val newSnapshots = nodeChildren.mapNotNull { (snapshot, children) ->
+                        // children == null iff this is a leaf
+                        // children[bucketIdx] is null iff this is a branch but without values in this bucket
+                        if (children != null) children[bucketIdx] else snapshot
                     }
-                }
 
-                return result
+                    if (newSnapshots.isNotEmpty())
+                        stack.push(WorkTask(newSnapshots, conjPath(workTask.path, bucketIdx.toByte())))
+                }
+            } else {
+                // All snapshots are leaves - create merge task
+                val pages = currentSnapshots.map { (it as TrieSnapshot.Leaf).pageMeta }
+                filterPages.filterPages(pages)
+                    ?.takeIf { it.isNotEmpty() }
+                    ?.let { filteredPages -> result += MergeTask(filteredPages.map { it.page }, workTask.path) }
             }
+        }
+
+        return result
     }
 }

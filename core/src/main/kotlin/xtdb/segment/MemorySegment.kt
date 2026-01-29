@@ -24,6 +24,10 @@ class MemorySegment(val trie: MemoryHashTrie, val rel: RelationReader) : Segment
 
         override fun testPage(leaf: MemoryHashTrie.Leaf) = true
 
+        override fun temporalMetadata(leaf: MemoryHashTrie.Leaf) = UNBOUND_TEMPORAL_METADATA
+
+        override fun recency(leaf: MemoryHashTrie.Leaf) = Long.MAX_VALUE
+
         override fun close() = Unit
     }
 
