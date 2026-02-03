@@ -52,7 +52,7 @@
   ([v]
    (apply-param-sym v nil))
   ([v prefix]
-   (-> (symbol (str "?_" prefix v))
+   (-> (symbol (str "?_sq_" prefix v))
        util/symbol->normal-form-symbol
        (with-meta {:correlated-column? true}))))
 
