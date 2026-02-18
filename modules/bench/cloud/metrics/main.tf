@@ -192,6 +192,19 @@ locals {
       metric_name     = "duration_minutes"
       dashboard_idx   = 9
     }
+    fusion = {
+      name            = "Fusion benchmark"
+      display_name    = "Fusion"
+      logic_app_name  = var.fusion_anomaly_logic_app_name
+      enabled         = var.fusion_anomaly_alert_enabled
+      param_name      = "devices"
+      param_path      = "parameters['devices']"
+      param_value     = var.fusion_anomaly_devices
+      param_is_string = false
+      metric_path     = "'throughput'"
+      metric_name     = "throughput"
+      dashboard_idx   = 10
+    }
   }
 
   # Dashboard part positions (5 cols wide, 4 rows tall each, 4 columns)
@@ -206,7 +219,8 @@ locals {
     6 = { x = 10, y = 4 }
     7 = { x = 15, y = 4 }
     8 = { x = 0, y = 8 }
-    9 = { x = 5, y = 8 }
+    9  = { x = 5, y = 8 }
+    10 = { x = 10, y = 8 }
   }
 
   # Filter expressions per benchmark (string params quoted, numeric params use todouble)
@@ -307,9 +321,9 @@ locals {
       | where benchmark == "${bench.name}" and filter_param == ${bench.param_value} and github_repo == "${var.anomaly_repo}" and git_branch == "${var.anomaly_branch}"
       | summarize TimeGenerated = max(TimeGenerated), duration_ms = avg(duration_ms) by run_id
       | top ${var.anomaly_baseline_n} by TimeGenerated desc
-      | extend duration_minutes = todouble(duration_ms) / 60000
+      ${bench.metric_name == "duration_minutes" ? "| extend duration_minutes = todouble(duration_ms) / 60000" : "| extend ${bench.metric_name} = duration_ms"}
       | order by TimeGenerated asc
-      | project TimeGenerated, duration_minutes
+      | project TimeGenerated, ${bench.metric_name}
     KQL
     )
   }

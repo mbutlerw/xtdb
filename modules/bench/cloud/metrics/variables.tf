@@ -289,3 +289,21 @@ variable "ts_devices_anomaly_size" {
   type        = string
   default     = "small"
 }
+
+variable "fusion_anomaly_logic_app_name" {
+  description = "Logic App name for scheduled Fusion anomaly detection"
+  type        = string
+  default     = "xtdb-bench-fusion-anomaly-schedule"
+}
+
+variable "fusion_anomaly_alert_enabled" {
+  description = "Whether the Fusion anomaly detection Logic App is enabled"
+  type        = bool
+  default     = true
+}
+
+variable "fusion_anomaly_devices" {
+  description = "Fusion device count to scope anomaly detection to"
+  type        = number
+  default     = 10000
+}
