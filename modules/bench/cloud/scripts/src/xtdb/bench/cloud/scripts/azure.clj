@@ -71,8 +71,10 @@
       metric_value = todouble(log['%s']),
       github_repo = tostring(log['github-repo']),
       git_branch = tostring(log['git-branch']),
+      run_id = tostring(log['github-run-id']),
       %s
   | where benchmark == \"%s\" and github_repo == \"%s\" and git_branch == \"%s\"%s and isnotnull(metric_value)
+  | summarize TimeGenerated = max(TimeGenerated), metric_value = avg(metric_value) by run_id
   | top %d by TimeGenerated desc
   | order by TimeGenerated asc
   | project TimeGenerated, metric_value"

@@ -284,8 +284,10 @@ locals {
                filter_param = tostring(log.${bench.param_path}),
                github_repo = tostring(log['github-repo']),
                git_branch = tostring(log['git-branch']),
-               duration_ms = todouble(log[${bench.metric_path}])
+               duration_ms = todouble(log[${bench.metric_path}]),
+               run_id = tostring(log['github-run-id'])
       | where benchmark == "${bench.name}" and filter_param == "${bench.param_value}" and github_repo == "${var.anomaly_repo}" and git_branch == "${var.anomaly_branch}"
+      | summarize TimeGenerated = max(TimeGenerated), duration_ms = avg(duration_ms) by run_id
       | top ${var.anomaly_baseline_n} by TimeGenerated desc
       ${bench.metric_name == "duration_minutes" ? "| extend duration_minutes = todouble(duration_ms) / 60000" : "| extend ${bench.metric_name} = duration_ms"}
       | order by TimeGenerated asc
@@ -300,8 +302,10 @@ locals {
                filter_param = todouble(log.${bench.param_path}),
                github_repo = tostring(log['github-repo']),
                git_branch = tostring(log['git-branch']),
-               duration_ms = todouble(log[${bench.metric_path}])
+               duration_ms = todouble(log[${bench.metric_path}]),
+               run_id = tostring(log['github-run-id'])
       | where benchmark == "${bench.name}" and filter_param == ${bench.param_value} and github_repo == "${var.anomaly_repo}" and git_branch == "${var.anomaly_branch}"
+      | summarize TimeGenerated = max(TimeGenerated), duration_ms = avg(duration_ms) by run_id
       | top ${var.anomaly_baseline_n} by TimeGenerated desc
       | extend duration_minutes = todouble(duration_ms) / 60000
       | order by TimeGenerated asc
@@ -440,7 +444,8 @@ resource "azapi_resource" "bench_anomaly" {
                       | extend benchmark = tostring(log.benchmark),
                                metric_value = todouble(log[${each.value.metric_path}]),
                                run_id = coalesce(tostring(log['github-run-id']), "n/a"),
-                               ${local.param_filter_expr[each.key]};
+                               ${local.param_filter_expr[each.key]}
+                      | summarize TimeGenerated = max(TimeGenerated), metric_value = avg(metric_value) by run_id;
                   let latestBenchmark =
                       benchmarkLogs
                       | summarize arg_max(TimeGenerated, *)
