@@ -640,8 +640,9 @@
                     (reset! shutting-down? true)
                     (try
                       (trigger-cleanup benchmark-type @ok?)
-                      ;; Signal to dump-uploader sidecar that cleanup was triggered
-                      (spit "/dumps/.cleanup-triggered" "true")
+                      ;; Signal to dump-uploader sidecar that cleanup was triggered (k8s only)
+                      (when (.isDirectory (java.io.File. "/dumps"))
+                        (spit "/dumps/.cleanup-triggered" "true"))
                       (catch Throwable u
                         (log/warn u "Cleanup trigger failed (ignored):")))))))))
 
