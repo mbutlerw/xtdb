@@ -305,16 +305,116 @@ To fully cleanup the storage, helm deployments and infrastructure on the cloud, 
 ./cloud/delete-infra.sh <aws|azure|google-cloud>
 ----
 
-== Extending
+== Adding a new benchmark
 
-If you need to add a new benchmark, you can do the following:
+=== Local benchmark
 
-1. Create a new Clojure file in src/main/clojure/xtdb/bench/ for your benchmark implementation
-2. You'll need to build and push the xtdb-bench docker image, you can do this via the "Build xtdb-bench Docker Image" GitHub Actions workflow if you've pushed your changes to the main branch. You'll also need to update the image tag in cloud/helm/values.yaml
-3. Add a gradle task with createBench in build.gradle.kts
-4. Update the cloud/run-bench.sh to include the new benchmark
-5. Create a helm template for the new benchmark in cloud/helm/templates/
-6. Update the cloud/helm/values.yaml with the new benchmark configuration
+1. Create a new Clojure file in `src/main/clojure/xtdb/bench/` for your benchmark implementation.
+2. Add a Gradle task with `createBench` in `build.gradle.kts`.
+3. You can now run locally via `./gradlew <name> -P<param>=<value>`.
+
+=== Adding to the nightly cloud run
+
+Benchmarks run asynchronously on Azure Kubernetes.
+GitHub Actions deploys the pod, waits briefly for it to start, then exits.
+When the benchmark finishes, it calls back to GitHub to trigger cleanup.
+
+Benchmarks run sequentially via a queue mechanism.
+The `nightly-benchmark-suite.yml` workflow kicks off nightly at midnight UTC, dispatching the first benchmark in the queue.
+When each benchmark's cleanup job completes, it dispatches the next one via `workflow_dispatch`.
+The queue order is defined in the "Dispatch Next Benchmark in Queue" step of `nightly-benchmark-cleanup.yml`.
+To add a new benchmark to the nightly suite, you must add it to that queue array as well as creating its own workflow file.
+You can also start from a specific benchmark using the suite's `start_from` input.
+
+The full pipeline touches several areas — benchmark code, workflows, Helm, Terraform metrics, and summary scripts.
+Every piece is required for end-to-end observability (dashboards, anomaly alerts, Slack graphs).
+
+==== 1. Benchmark code (`src/main/clojure/xtdb/bench/<name>.clj`)
+
+* Ensure your benchmark returns a map with a `:parameters` field (e.g. `{:doc-count 100000, :scale-factor 1.0}`).
+This is required for metrics filtering and dashboard queries.
+
+==== 2. Docker image
+
+* You'll need to build and push the `xtdb-bench` Docker image, this is triggered automatically by the run-nightly-benchmark.yml flow.
+Use the "Build xtdb-bench Docker Image" GitHub Actions workflow if you've pushed your changes to `main`.
+
+==== 3. GitHub workflows (`.github/workflows/`)
+
+Create `nightly-benchmark-<name>.yml`::
+Copy from an existing benchmark workflow (e.g. `nightly-benchmark-readings.yml`).
+Set `bench_type: <name>` (must match CLI arg name).
+Add `workflow_dispatch` inputs for benchmark parameters.
+Set appropriate `timeout_minutes` (deploy wait) and `benchmark_timeout` (runtime limit).
+
+Update `run-nightly-benchmark.yml`::
+* Add input parameters.
+* Add env vars in the deployment step.
+* Add Helm `--set` conditionals.
+If parameters contain commas, escape them: `${VAR//,/\\,}`.
+* Add to Slack notification config.
+
+==== 4. Helm chart (`cloud/helm/`)
+
+Create `templates/benchmark-<name>.yaml`::
+Copy from a similar benchmark template.
+Update the conditional to `{{- if eq .Values.benchType "<name>" }}`.
+Update metadata name, job name, and the args section to pass benchmark parameters.
+
+Update `values.yaml`::
+Add a config block with defaults for your benchmark's parameters.
+
+==== 5. Terraform metrics (`cloud/metrics/`)
+
+This wires up the Azure dashboard and anomaly detection alerts.
+
+Update `variables.tf`::
+Add three variables: anomaly Logic App name, alert enabled flag, and filter parameter.
+
+Update `main.tf`::
+* Add to the `benchmarks` map — name, display name, Logic App, parameter config, metric path, dashboard index.
+* Add a dashboard position — 2×3 grid, each chart is 6 cols wide × 4 rows tall.
+
+==== 6. Benchmark scripts (`cloud/scripts/src/xtdb/bench/cloud/scripts/`)
+
+These handle log parsing, summary formatting, and Slack/GitHub output.
+
+`charts.clj`::
+Add to the `benchmark-configs` map.
+The `:benchmark-name` must match the Terraform `name` exactly.
+
+`log_parsing.clj`::
+Add a `parse-log` multimethod for your benchmark type.
+Parse the JSON stage lines and extract relevant stages.
+
+`summary.clj`::
+* Add a stage-row transformation helper.
+* Add a summary-row builder.
+* Implement three multimethod formats: `summary->table`, `summary->slack`, `summary->github-markdown`.
+
+`tasks.clj`::
+* Add validation in `summarize-log` (check for empty stages).
+* Update help text to list the new benchmark type.
+
+==== Gotchas
+
+* *Name consistency* — the `:title` in benchmark code, `name` in Terraform, and `:benchmark-name` in `charts.clj` must all match.
+* *Comma escaping* — parameters containing commas (like `"1000,100,10,1"`) need escaping in the workflow.
+* *Parameter types in KQL* — string params (ISO durations) need quotes, numeric params use `todouble()`.
+* *`timeout_minutes` vs `benchmark_timeout`* — workflow timeout is how long GH Actions waits for deployment; benchmark timeout is the actual runtime limit passed via `--timeout`.
+These are independent.
+
+==== Testing checklist
+
+Once all pieces are in place, verify:
+
+1. Manual `workflow_dispatch` triggers successfully.
+2. Helm deployment starts the pod and runs the benchmark.
+3. `ContainerLog` in Azure contains the benchmark's JSON log lines.
+4. Dashboard chart appears after the first run.
+5. Anomaly detection Logic App triggers daily.
+6. Slack posts a timeseries chart and text summary on completion.
+7. `terraform plan` / `terraform apply` in `cloud/metrics/` succeeds.
 
 == CI and Grafana Dashboard Images
 
