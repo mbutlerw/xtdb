@@ -1351,3 +1351,25 @@
         (t/is (= 3 (:row-count scan-op))
               (format "scan should only read %d rows with IID pushdown, not full table scan (got %d)"
                       (count lookup-ids) (:row-count scan-op)))))))
+
+(t/deftest non-uuid-id-iid-pushdown-test
+  (doseq [id-type [:string :integer]
+          :let [ids (case id-type
+                      :string (mapv #(str "id-" %) (range 1000))
+                      :integer (vec (range 1000)))
+                lookup-ids (take 3 ids)]]
+    (t/testing (str "IID pushdown with " (name id-type) " _id")
+      (util/with-open [node (xtn/start-node)]
+        (xt/execute-tx node [(into [:put-docs :docs]
+                                   (map-indexed (fn [i id] {:xt/id id :idx i}) ids))])
+
+        (let [result (xt/q node
+                           (into ["EXPLAIN ANALYZE SELECT d._id, d.idx FROM docs d WHERE d._id IN (?, ?, ?)"]
+                                 lookup-ids))
+              scan-op (->> result (filter #(= (:op %) :scan)) first)]
+
+          (t/is (some? scan-op) "should have a scan operator")
+
+          (t/is (= 3 (:row-count scan-op))
+                (format "scan should only read 3 rows with IID pushdown for %s _id, not full table scan (got %d)"
+                        (name id-type) (:row-count scan-op))))))))

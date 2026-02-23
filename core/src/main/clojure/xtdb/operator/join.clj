@@ -176,11 +176,12 @@
         (let [build-col-name (nth build-key-col-names col-idx)
               build-col (.vectorForOrNull build-rel (str build-col-name))
               ^MutableRoaringBitmap pushdown-bloom (nth pushdown-blooms col-idx)
-              ^SortedSet col-pushdown-iids (nth pushdown-iids col-idx)]
+              ^SortedSet col-pushdown-iids (nth pushdown-iids col-idx)
+              iid-col? (= "_iid" (name build-col-name))]
           (dotimes [build-idx (.getRowCount build-rel)]
-            (when col-pushdown-iids
+            (when (and col-pushdown-iids (not (.isNull build-col build-idx)))
               (let [v (.getObject build-col build-idx)]
-                (.add col-pushdown-iids (cond-> v (uuid? v) util/uuid->bytes))))
+                (.add col-pushdown-iids (if iid-col? v (util/->iid v)))))
             (.add pushdown-bloom ^ints (BloomUtils/bloomHashes build-col build-idx))))))))
 
 (deftype JoinCursor [^BufferAllocator allocator,
@@ -399,13 +400,10 @@
                                                our-pushdown-iids (update :pushdown-iids (fnil into {}) our-pushdown-iids))))]
                      (let [pushdown-blooms (when pushdown-blooms?
                                              (vec (repeatedly (count build-key-col-names) #(MutableRoaringBitmap.))))
-                           pushdown-iids (->> build-key-col-names
+                           pushdown-iids (->> probe-key-col-names
                                               (mapv (fn [col-name]
-                                                      (let [^VectorType build-col-type (get build-vec-types col-name)]
-                                                        (when (or (and (= build-col-type #xt/type :varbinary)
-                                                                       (str/ends-with? col-name "/_iid"))
-                                                                  (= build-col-type #xt/type :uuid))
-                                                          (TreeSet. Bytes/COMPARATOR))))))
+                                                      (when (#{"_id" "_iid"} (name col-name))
+                                                        (TreeSet. Bytes/COMPARATOR)))))
                            cmp-factory (->cmp-factory {:build-vec-types build-vec-types
                                                        :probe-vec-types probe-vec-types
                                                        :with-nil-row? with-nil-row?
