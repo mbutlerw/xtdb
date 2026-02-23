@@ -294,6 +294,10 @@ allprojects {
                         jvmArgs += "-enableassertions"
                     }
 
+                    if (project.hasProperty("tmpDir")) {
+                        jvmArgs += "-Djava.io.tmpdir=${project.property("tmpDir")}"
+                    }
+
                     if (project.hasProperty("replPort"))
                         port.set(project.property("replPort").toString().toInt())
 
@@ -720,6 +724,13 @@ createBench("tpch", mapOf("scaleFactor" to "--scale-factor"))
 
 createBench("yakbench", mapOf(
     "scaleFactor" to "--scale-factor",
+    "noLoad" to "--no-load",
+    "nodeDir" to "--node-dir"
+))
+
+createBench("scan-perf", mapOf(
+    "nItems" to "--n-items",
+    "idType" to "--id-type",
     "noLoad" to "--no-load",
     "nodeDir" to "--node-dir"
 ))
