@@ -10,7 +10,6 @@
             [xtdb.test-util :as tu]
             [xtdb.util :as util])
   (:import (java.time Duration Instant)
-           (java.util UUID)
            (java.util.concurrent.atomic AtomicLong)))
 
 ;; See fusion.md for benchmark documentation
@@ -27,8 +26,8 @@
 (defn random-int [rng min max]
   (+ min (random/next-int rng (- max min))))
 
-(defn generate-ids [rng n]
-  (vec (repeatedly n #(random/next-uuid rng))))
+(defn generate-ids [rng prefix n]
+  (vec (repeatedly n #(str prefix "-" (random/next-string rng 12)))))
 
 (defn generate-organisation [org-id name]
   {:xt/id org-id
@@ -107,9 +106,9 @@
 
      ;; Credential/controller fields (sparse, like production)
      :certificate-credential-id (when (random/chance? rng 0.3)
-                                  (str "cert-" (random/next-uuid rng)))
+                                  (str "cert-" (random/next-string rng 12)))
      :controller-listing-id (when (random/chance? rng 0.4)
-                              (str "ctrl-" (random/next-uuid rng)))
+                              (str "ctrl-" (random/next-string rng 12)))
 
      :updated-time (double (System/currentTimeMillis))}))
 
@@ -117,7 +116,7 @@
   {:xt/id device-id
    :system-id system-id
    :device-model-id device-model-id
-   :serial-number (str "SN-" (random/next-uuid rng))
+   :serial-number (str "SN-" (random/next-string rng 12))
    :installed-at base-time})
 
 ;; Registration test tables - for cumulative registration query
@@ -233,7 +232,7 @@
         ;; Simulate 80% pass rate
         (log/infof "Inserting test suite runs for %d systems" (count system-ids))
         (doseq [system-id system-ids]
-          (let [suite-run-id (random/next-uuid random)
+          (let [suite-run-id (str "TSR-" (random/next-string random 12))
                 suite-run (generate-test-suite-run random suite-run-id system-id test-suite-id base-time)
                 suite-passed? (:passed? suite-run)]
             (xt/submit-tx node [(into [:put-docs :test_suite_run]
@@ -241,7 +240,7 @@
             (xt/submit-tx node [(into [:put-docs :test_case_run]
                                       (map (fn [case-id]
                                              (generate-test-case-run random
-                                                                     (random/next-uuid random)
+                                                                     (str "TCR-" (random/next-string random 12))
                                                                      suite-run-id
                                                                      case-id
                                                                      suite-passed?
@@ -566,14 +565,14 @@
   (let [^Duration duration (cond-> duration (string? duration) Duration/parse)
         setup-rng (java.util.Random. seed)
         base-time (.minus (Instant/now) (Duration/ofDays 3))
-        system-ids (generate-ids setup-rng devices)
+        system-ids (generate-ids setup-rng "SYS" devices)
         site-ids (mapv #(str "SITE-" %) (range devices))
-        organisation-ids (generate-ids setup-rng 5)
-        device-series-ids (generate-ids setup-rng 25) ; 5 series per org
-        device-model-ids (generate-ids setup-rng 50) ; 2 models per series
-        device-ids (generate-ids setup-rng (* devices 2))
-        test-suite-id (random/next-uuid setup-rng)
-        test-case-ids (generate-ids setup-rng 5)] ; 5 test cases per suite
+        organisation-ids (generate-ids setup-rng "ORG" 5)
+        device-series-ids (generate-ids setup-rng "DS" 25) ; 5 series per org
+        device-model-ids (generate-ids setup-rng "DM" 50) ; 2 models per series
+        device-ids (generate-ids setup-rng "DEV" (* devices 2))
+        test-suite-id (str "TS-" (random/next-string setup-rng 12))
+        test-case-ids (generate-ids setup-rng "TC" 5)] ; 5 test cases per suite
     (log/info {:devices devices :readings readings :batch-size batch-size
                :update-batch-size update-batch-size :updates-per-system updates-per-system
                :duration duration :threads threads :staged-only? staged-only?})
