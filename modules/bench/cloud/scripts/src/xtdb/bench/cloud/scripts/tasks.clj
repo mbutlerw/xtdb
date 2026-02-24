@@ -58,7 +58,17 @@
                                    :log-file log-file-path})))
         "products" nil
         "ts-devices" nil
-        "fusion" nil)
+        "fusion" nil
+        "scan-perf" (when (or (nil? (:profiles parsed-summary))
+                              (empty? (:profiles parsed-summary)))
+                      (throw (ex-info "No profile data found in log file"
+                                      {:benchmark-type "scan-perf"
+                                       :log-file log-file-path})))
+        "scan-perf-str" (when (or (nil? (:profiles parsed-summary))
+                                  (empty? (:profiles parsed-summary)))
+                          (throw (ex-info "No profile data found in log file"
+                                          {:benchmark-type "scan-perf-str"
+                                           :log-file log-file-path}))))
       (summary/render-summary parsed-summary {:format format}))))
 
 (defn plot-benchmark-timeseries
@@ -162,7 +172,7 @@
   (println "  plot-benchmark-timeseries [options] <benchmark-type>")
   (println "      Plot a benchmark timeseries chart from Azure Log Analytics.")
   (println "      Options: --scale-factor SF, --repo owner/repo, --branch branch")
-  (println "      Supported: tpch, yakbench, auctionmark, readings, clickbench, tsbs-iot, ingest-tx-overhead, patch, products, ts-devices, fusion")
+  (println "      Supported: tpch, yakbench, auctionmark, readings, clickbench, tsbs-iot, ingest-tx-overhead, patch, products, ts-devices, fusion, scan-perf, scan-perf-str")
   (println)
   (println "Kubernetes Commands (output JSON):")
   (println "  inspect-deployment [--namespace NS]")

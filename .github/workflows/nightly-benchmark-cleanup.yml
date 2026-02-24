@@ -1,6 +1,6 @@
 name: Nightly Benchmark Cleanup
 run-name: >-
-  Benchmark Cleanup: ${{ inputs.benchType == 'tpch' && 'TPC-H' || inputs.benchType == 'auctionmark' && 'AuctionMark' || inputs.benchType == 'readings' && 'Readings' || inputs.benchType == 'yakbench' && 'Yakbench' || inputs.benchType == 'clickbench' && 'ClickBench' || inputs.benchType == 'tsbs-iot' && 'TSBS IoT' || inputs.benchType == 'ingest-tx-overhead' && 'Ingest TX Overhead' || inputs.benchType == 'patch' && 'Patch' || inputs.benchType == 'products' && 'Products' || inputs.benchType == 'ts-devices' && 'TS Devices' || inputs.benchType == 'fusion' && 'Fusion' || inputs.benchType }}
+  Benchmark Cleanup: ${{ inputs.benchType == 'tpch' && 'TPC-H' || inputs.benchType == 'auctionmark' && 'AuctionMark' || inputs.benchType == 'readings' && 'Readings' || inputs.benchType == 'yakbench' && 'Yakbench' || inputs.benchType == 'clickbench' && 'ClickBench' || inputs.benchType == 'tsbs-iot' && 'TSBS IoT' || inputs.benchType == 'ingest-tx-overhead' && 'Ingest TX Overhead' || inputs.benchType == 'patch' && 'Patch' || inputs.benchType == 'products' && 'Products' || inputs.benchType == 'ts-devices' && 'TS Devices' || inputs.benchType == 'fusion' && 'Fusion' || inputs.benchType == 'scan-perf' && 'Scan Perf' || inputs.benchType == 'scan-perf-str' && 'Scan Perf Str' || inputs.benchType }}
 
 on:
   workflow_dispatch:
@@ -21,6 +21,8 @@ on:
           - products
           - ts-devices
           - fusion
+          - scan-perf
+          - scan-perf-str
       status:
         description: 'Status of the benchmark'
         required: true
@@ -553,6 +555,8 @@ jobs:
             products) bench_friendly="Products" ;;
             ts-devices) bench_friendly="TS Devices" ;;
             fusion) bench_friendly="Fusion" ;;
+            scan-perf) bench_friendly="Scan Perf" ;;
+            scan-perf-str) bench_friendly="Scan Perf Str" ;;
             *) bench_friendly="$bench" ;;
           esac
 
@@ -624,6 +628,8 @@ jobs:
           [ "$type" = "products" ] && type="Products"
           [ "$type" = "ts-devices" ] && type="TS Devices"
           [ "$type" = "fusion" ] && type="Fusion"
+          [ "$type" = "scan-perf" ] && type="Scan Perf"
+          [ "$type" = "scan-perf-str" ] && type="Scan Perf Str"
 
           status="${{ steps.derive.outputs.bench_status || inputs.status }}"
           if [ "$status" = "success" ]; then
@@ -787,6 +793,8 @@ jobs:
             products) FRIENDLY_NAME="Products" ;;
             ts-devices) FRIENDLY_NAME="TS Devices" ;;
             fusion) FRIENDLY_NAME="Fusion" ;;
+            scan-perf) FRIENDLY_NAME="Scan Perf" ;;
+            scan-perf-str) FRIENDLY_NAME="Scan Perf Str" ;;
             *) FRIENDLY_NAME="$BENCH_TYPE" ;;
           esac
 
@@ -835,7 +843,7 @@ jobs:
             const queue = [
               'tpch', 'yakbench', 'readings', 'auctionmark',
               'clickbench', 'tsbs-iot', 'ingest-tx-overhead',
-              'patch', 'products', 'ts-devices', 'fusion'
+              'patch', 'products', 'ts-devices', 'fusion', 'scan-perf', 'scan-perf-str'
             ];
             const current = '${{ inputs.benchType }}';
             const idx = queue.indexOf(current);

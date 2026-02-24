@@ -205,6 +205,19 @@ locals {
       metric_name     = "throughput"
       dashboard_idx   = 10
     }
+    scan-perf = {
+      name            = "Scan Perf"
+      display_name    = "Scan Perf"
+      logic_app_name  = var.scan_perf_anomaly_logic_app_name
+      enabled         = var.scan_perf_anomaly_alert_enabled
+      param_name      = "n-items"
+      param_path      = "parameters['n-items']"
+      param_value     = var.scan_perf_anomaly_n_items
+      param_is_string = false
+      metric_path     = "'time-taken-ms'"
+      metric_name     = "duration_minutes"
+      dashboard_idx   = 11
+    }
   }
 
   # Dashboard part positions (5 cols wide, 4 rows tall each, 4 columns)
@@ -221,6 +234,7 @@ locals {
     8 = { x = 0, y = 8 }
     9  = { x = 5, y = 8 }
     10 = { x = 10, y = 8 }
+    11 = { x = 15, y = 8 }
   }
 
   # Filter expressions per benchmark (string params quoted, numeric params use todouble)

@@ -225,6 +225,22 @@
      :benchmark-total-time-ms benchmark-total-time-ms
      :benchmark-summary benchmark-summary}))
 
+(defmethod parse-log "scan-perf" [_benchmark-type log-file-path]
+  (let [content (slurp log-file-path)
+        lines (str/split-lines content)
+        profiles-line (first (filter #(str/includes? % "\"profiles\":") lines))
+        profiles (when profiles-line
+                   (try
+                     (:profiles (json/parse-string profiles-line true))
+                     (catch Exception _ nil)))
+        {:keys [benchmark-total-time-ms benchmark-summary]} (parse-benchmark-summary lines)]
+    {:profiles profiles
+     :benchmark-total-time-ms benchmark-total-time-ms
+     :benchmark-summary benchmark-summary}))
+
+(defmethod parse-log "scan-perf-str" [_ log-file-path]
+  (parse-log "scan-perf" log-file-path))
+
 (defn load-summary
   "Load and parse a benchmark log file, returning summary with benchmark type."
   [benchmark-type log-file-path]

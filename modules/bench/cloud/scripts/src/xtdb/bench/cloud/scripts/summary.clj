@@ -321,6 +321,15 @@
          "\n\n"
          (rows->string [:stage :time-taken-ms :duration :percent-of-total] rows))))
 
+(defmethod summary->table "scan-perf" [summary]
+  (let [{:keys [rows total-ms]} (yakbench-summary->query-rows summary)]
+    (str (util/totals->string total-ms (:benchmark-total-time-ms summary))
+         "\n\n"
+         (rows->string [:query :n :p50 :p90 :p99 :mean :percent-of-total] rows))))
+
+(defmethod summary->table "scan-perf-str" [summary]
+  (summary->table (assoc summary :benchmark-type "scan-perf")))
+
 ;; summary->slack multimethod
 
 (defmulti summary->slack :benchmark-type)
@@ -415,6 +424,28 @@
      "\n\n"
      (util/wrap-slack-code
       (rows->string [:stage :duration] rows)))))
+
+(defmethod summary->slack "scan-perf" [summary]
+  (let [{:keys [rows total-ms]} (yakbench-summary->query-rows summary)
+        mid (Math/ceil (/ (count rows) 2))
+        [first-half second-half] (split-at mid rows)]
+    (if (seq second-half)
+      (str
+       (util/totals->string total-ms (:benchmark-total-time-ms summary))
+       "\n\n"
+       (util/wrap-slack-code
+        (rows->string [:query :p50 :p99 :mean] first-half))
+       "\n---SLACK-SPLIT---\n"
+       (util/wrap-slack-code
+        (rows->string [:query :p50 :p99 :mean] second-half)))
+      (str
+       (util/totals->string total-ms (:benchmark-total-time-ms summary))
+       "\n\n"
+       (util/wrap-slack-code
+        (rows->string [:query :p50 :p99 :mean] rows))))))
+
+(defmethod summary->slack "scan-perf-str" [summary]
+  (summary->slack (assoc summary :benchmark-type "scan-perf")))
 
 ;; summary->github-markdown multimethod
 
@@ -522,6 +553,22 @@
     (str (util/github-table columns rows)
          "\n\n"
          (util/totals->string total-ms (:benchmark-total-time-ms summary)))))
+
+(defmethod summary->github-markdown "scan-perf" [summary]
+  (let [{:keys [rows total-ms]} (yakbench-summary->query-rows summary)
+        columns [{:key :query :header "Query"}
+                 {:key :n :header "N"}
+                 {:key :p50 :header "P50"}
+                 {:key :p90 :header "P90"}
+                 {:key :p99 :header "P99"}
+                 {:key :mean :header "Mean"}
+                 {:key :percent-of-total :header "% of total"}]]
+    (str (util/github-table columns rows)
+         "\n\n"
+         (util/totals->string total-ms (:benchmark-total-time-ms summary)))))
+
+(defmethod summary->github-markdown "scan-perf-str" [summary]
+  (summary->github-markdown (assoc summary :benchmark-type "scan-perf")))
 
 ;; Render summary
 

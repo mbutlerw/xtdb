@@ -1,0 +1,46 @@
+name: Nightly Benchmark Scan Perf
+run-name: "Scan Perf (N Items: ${{ inputs.scan_perf_n_items || '10000000' }}, ID Type: ${{ inputs.scan_perf_id_type || 'uuid' }})"
+
+on:
+  workflow_dispatch:
+    inputs:
+      scan_perf_n_items:
+        description: 'Number of items'
+        required: false
+        default: '10000000'
+        type: string
+      scan_perf_id_type:
+        description: 'ID type (uuid, string, keyword)'
+        required: false
+        default: 'uuid'
+        type: string
+      run_queue:
+        description: 'Part of nightly benchmark queue (set by suite workflow)'
+        required: false
+        default: 'false'
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+  actions: write
+  packages: write
+
+concurrency:
+  group: nightly-benchmark-scan-perf
+  cancel-in-progress: false
+
+jobs:
+  benchmark:
+    if: ${{ github.event_name != 'schedule' || github.repository == 'xtdb/xtdb' }}
+    uses: ./.github/workflows/run-nightly-benchmark.yml
+    with:
+      bench_type: scan-perf
+      job_display_name: Scan Perf
+      branch: ${{ github.ref_name }}
+      timeout_minutes: 120
+      benchmark_timeout: PT3H
+      scan_perf_n_items: ${{ inputs.scan_perf_n_items || '10000000' }}
+      scan_perf_id_type: ${{ inputs.scan_perf_id_type || 'uuid' }}
+      run_queue: ${{ inputs.run_queue || 'false' }}
+    secrets: inherit

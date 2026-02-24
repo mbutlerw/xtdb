@@ -128,7 +128,17 @@
                  :title "TS Devices Benchmark Performance"
                  :filter-param "size"
                  :filter-value "small"
-                 :filter-is-string true}})
+                 :filter-is-string true}
+   "scan-perf-str" {:benchmark-name "Scan Perf Str"
+                    :title "Scan Perf Str Benchmark Performance"
+                    :filter-param "n-items"
+                    :filter-value 10000000
+                    :filter-is-string false}
+   "scan-perf" {:benchmark-name "Scan Perf"
+                :title "Scan Perf Benchmark Performance"
+                :filter-param "n-items"
+                :filter-value 10000000
+                :filter-is-string false}})
 
 (defn plot-benchmark-timeseries
   "Plot a benchmark timeseries chart from Azure Log Analytics.

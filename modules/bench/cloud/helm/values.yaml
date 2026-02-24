@@ -40,6 +40,13 @@ fusion:
   duration: "PT30M"
   threads: 4
 
+scan-perf:
+  nItems: 10000000
+  idType: uuid
+
+scan-perf-str:
+  nItems: 10000000
+
 ingestTxOverhead:
   docCount: 100000
   batchSizes: "1000,100,10,1"
