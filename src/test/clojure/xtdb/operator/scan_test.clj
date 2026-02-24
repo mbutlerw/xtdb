@@ -14,7 +14,6 @@
   (:import java.util.Arrays
            java.util.Date
            java.util.SortedSet
-           (java.util.function IntPredicate)
            xtdb.arrow.RelationReader
            (xtdb.compactor RecencyPartition)))
 
@@ -550,23 +549,22 @@
 
   (c/compact-all! tu/*node* #xt/duration "PT1S")
 
-  (let [!page-idxs-cnt (atom 0)
-        old-filter-trie-match scan/filter-pushdown-bloom-page-idx-pred]
-    (with-redefs [scan/filter-pushdown-bloom-page-idx-pred (fn [& args]
-                                                             (when-let [^IntPredicate pred (apply old-filter-trie-match args)]
-                                                               (reify IntPredicate
-                                                                 (test [_ page-idx]
-                                                                   (let [res (.test pred page-idx)]
-                                                                     (when res (swap! !page-idxs-cnt inc))
-                                                                     res)))))]
+  (let [ra-query '[:join {:conditions [{col col}]}
+                   [:scan {:table #xt/table xt_docs, :columns [col {col (== col "toto")}]}]
+                   [:scan {:table #xt/table xt_docs, :columns [col]}]]]
+
+    (t/testing "results are correct"
       (t/is (= [{:col "toto"}]
-               (tu/query-ra
-                '[:join {:conditions [{col col}]}
-                  [:scan {:table #xt/table xt_docs, :columns [col {col (== col "toto")}]}]
-                  [:scan {:table #xt/table xt_docs, :columns [col]}]]
-                {:node tu/*node*})))
-      ;; one page for the right side
-      (t/is (= 1 @!page-idxs-cnt)))))
+               (tu/query-ra ra-query {:node tu/*node*}))))
+
+    (t/testing "bloom filter pushdown reaches probe-side scan"
+      (let [ea-results (tu/query-ra ra-query {:node tu/*node* :explain-analyze? true})
+            scans (filter #(= :scan (:op %)) ea-results)
+            probe-scan (second scans)]
+        (t/is (some? probe-scan))
+        (t/is (pos-int? (get-in (first (:pushdowns probe-scan)) [:bloom-filter :cardinality])))
+        (t/is (= 1 (:page-count probe-scan))
+              "bloom filter should reduce probe-side to 1 page")))))
 
 (deftest test-pushdown-blooms-through-project
   (xt/execute-tx tu/*node* [[:put-docs :xt-docs {:xt/id :foo, :col "foo"}]
