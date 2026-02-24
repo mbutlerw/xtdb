@@ -52,6 +52,13 @@
      :clustered-1000 clustered-1000
      :langs (vec (distinct (map :item/lang spread-1000)))}))
 
+(defn scan-items-point-benchmark-queries
+  "Individual point lookups at each 10% position in the index."
+  [{:keys [spread-10]}]
+  (for [[i id] (map-indexed vector spread-10)]
+    {:id (keyword (str "scan-p" (* i 10)))
+     :f #(xt/q % ["SELECT _id FROM items WHERE _id = ?" id])}))
+
 (defn scan-items-set-benchmark-queries
   [{:keys [spread-10 spread-100 spread-1000 clustered-10 clustered-100 clustered-1000]}]
   (let [ids #(mapv :xt/id %)]
@@ -214,6 +221,14 @@
                    (swap! !state assoc :distributed-items (get-distributed-items conn))))}
 
            {:t :call
+            :stage :profile-scan-points
+            :f (fn [{:keys [node !state]}]
+                 (let [{:keys [distributed-items]} @!state
+                       {:keys [profile formatted]} (profile node 50 (scan-items-point-benchmark-queries distributed-items))]
+                   (swap! !state update :profiles assoc :scan-points profile)
+                   (println formatted)))}
+
+           {:t :call
             :stage :profile-scan-sets
             :f (fn [{:keys [node !state]}]
                  (let [{:keys [distributed-items]} @!state
@@ -285,6 +300,14 @@
                      (swap! !state assoc :distributed-items (get-distributed-items conn))))}
 
              {:t :call
+              :stage :profile-scan-points
+              :f (fn [{:keys [node !state]}]
+                   (let [{:keys [distributed-items]} @!state
+                         {:keys [profile formatted]} (profile node 50 (scan-items-point-benchmark-queries distributed-items))]
+                     (swap! !state update :profiles assoc :scan-points profile)
+                     (println formatted)))}
+
+             {:t :call
               :stage :profile-scan-sets
               :f (fn [{:keys [node !state]}]
                    (let [{:keys [distributed-items]} @!state
@@ -322,6 +345,8 @@
         (c/compact-all! node nil)
         (println "Get Query Data")
         (let [distributed-items (get-distributed-items conn)]
+          (println "Profile Point Lookups")
+          (println (:formatted (profile node 50 (scan-items-point-benchmark-queries distributed-items))))
           (println "Profile Scan Sets")
           (println (:formatted (profile node 50 (scan-items-set-benchmark-queries distributed-items))))
           (println "Profile Content Key")
