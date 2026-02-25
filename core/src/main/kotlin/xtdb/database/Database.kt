@@ -11,10 +11,12 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import org.apache.arrow.memory.BufferAllocator
+import xtdb.api.TransactionResult
 import xtdb.api.YAML_SERDE
 import xtdb.api.log.Log
 import xtdb.api.log.Log.Message
 import xtdb.api.log.MessageId
+import xtdb.api.log.Watchers
 import xtdb.util.MsgIdUtil.offsetToMsgId
 import xtdb.api.storage.Storage
 import xtdb.api.storage.Storage.applyStorage
@@ -36,6 +38,7 @@ import xtdb.storage.BufferPool
 import xtdb.trie.TrieCatalog
 import java.time.Duration
 import java.util.*
+import java.util.concurrent.CompletableFuture
 
 data class SourceIndexer(
     val state: DatabaseState,
@@ -49,9 +52,15 @@ data class ReplicaIndexer(
     val compactor: Compactor.ForDatabase,
     val state: DatabaseState,
     val liveIndex: LiveIndex,
+    private val watchers: Watchers,
     val txSource: TxSource? = null,
 ) {
     val logProcessor: LogProcessor get() = logProcessorOrNull ?: error("replica log processor not initialised")
+
+    fun awaitSourceMessageAsync(sourceMsgId: MessageId): CompletableFuture<TransactionResult?> {
+        checkNotNull(logProcessorOrNull) { "log processor not initialised" }
+        return watchers.awaitAsync(sourceMsgId)
+    }
 }
 
 data class Database(
@@ -90,7 +99,7 @@ data class Database(
         sourceLog.appendMessage(Message.FlushBlock(blockCatalog.currentBlockIndex ?: -1)).await()
     }
 
-    fun sendAttachDbMessage(dbName: DatabaseName, config: Database.Config): Log.MessageMetadata = runBlocking {
+    fun sendAttachDbMessage(dbName: DatabaseName, config: Config): Log.MessageMetadata = runBlocking {
         sourceLog.appendMessage(Message.AttachDatabase(dbName, config)).await()
     }
 
@@ -100,8 +109,10 @@ data class Database(
 
     @Serializable
     enum class Mode {
-        @SerialName("read-write") READ_WRITE,
-        @SerialName("read-only") READ_ONLY;
+        @SerialName("read-write")
+        READ_WRITE,
+        @SerialName("read-only")
+        READ_ONLY;
 
         fun toProto(): DatabaseMode = when (this) {
             READ_WRITE -> DatabaseMode.READ_WRITE
@@ -153,8 +164,9 @@ data class Database(
     interface Catalog : ILookup, Seqable, Iterable<Database>, IQuerySource.QueryCatalog {
         companion object {
             private suspend fun Database.await(msgId: MessageId) {
-                logProcessor.awaitAsync(msgId).await()
+                replicaIndexer.awaitSourceMessageAsync(msgId).await()
             }
+
             private suspend fun Database.sync() = await(sourceLog.latestSubmittedMsgId)
 
             private suspend fun Catalog.awaitAll0(token: String) = coroutineScope {

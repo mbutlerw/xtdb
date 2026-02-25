@@ -248,17 +248,19 @@
             :indexer (ig/ref :xtdb.indexer/for-db)
             :live-index (ig/ref :xtdb.indexer/live-index)
             :compactor (ig/ref :xtdb.compactor/for-db)
+            :watchers (ig/ref :xtdb.indexer.replica-log/watchers)
             :tx-source (ig/ref :xtdb.tx-source/for-db)}
            (assoc (dissoc opts :indexer-conf :tx-source-conf)
                   :skip-txs (.getSkipTxs indexer-conf)
                   :enabled? (.getEnabled indexer-conf)))})
 
 (defmethod ig/init-key :xtdb.log/processor [_ {{:keys [meter-registry]} :base
-                                               :keys [allocator ^DatabaseStorage db-storage db-state indexer live-index compactor skip-txs enabled? db-catalog tx-source]}]
+                                               :keys [allocator ^DatabaseStorage db-storage db-state indexer live-index compactor skip-txs watchers enabled? db-catalog tx-source]}]
   (when enabled?
     (ReplicaLogProcessor. allocator meter-registry
                           db-storage db-state
                           indexer live-index compactor (set skip-txs)
+                          watchers
                           1024
                           db-catalog
                           tx-source)))
@@ -269,7 +271,7 @@
 (defn await-db
   ([db msg-id] (await-db db msg-id nil))
   ([^Database db, ^long msg-id, ^Duration timeout]
-   @(cond-> (.awaitAsync (.getLogProcessor db) msg-id)
+   @(cond-> (.awaitSourceMessageAsync (.getReplicaIndexer db) msg-id)
       timeout (.orTimeout (.toMillis timeout) TimeUnit/MILLISECONDS))))
 
 (defn sync-db

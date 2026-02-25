@@ -59,6 +59,7 @@ class ReplicaLogProcessor @JvmOverloads constructor(
     private val liveIndex: LiveIndex,
     private val compactor: Compactor.ForDatabase,
     private val skipTxs: Set<MessageId>,
+    private val watchers: Watchers,
     private val maxBufferedRecords: Int = 1024,
     private val dbCatalog: Database.Catalog? = null,
     private val txSource: Indexer.TxSource? = null
@@ -97,8 +98,6 @@ class ReplicaLogProcessor @JvmOverloads constructor(
     override val latestProcessedOffset = blockCatalog.latestProcessedMsgId?.let {
         if (msgIdToEpoch(it) == epoch) msgIdToOffset(it) else -1
     } ?: -1
-
-    private val watchers = Watchers(latestProcessedMsgId)
 
     override val ingestionError get() = watchers.exception
 
@@ -265,5 +264,4 @@ class ReplicaLogProcessor @JvmOverloads constructor(
         watchers.notify(msgId, e)
     }
 
-    override fun awaitAsync(msgId: MessageId) = watchers.awaitAsync(msgId)
 }

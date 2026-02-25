@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import xtdb.api.log.InMemoryLog
 import xtdb.api.log.Log
+import xtdb.api.log.Watchers
 import xtdb.api.storage.ObjectStore
 import xtdb.block.proto.block
 import xtdb.catalog.BlockCatalog
@@ -96,6 +97,7 @@ class ReplicaLogProcessorTest {
                 liveIndex,
                 mockk<Compactor.ForDatabase>(relaxed = true),
                 emptySet(),
+                watchers = Watchers(-1),
                 maxBufferedRecords = 2
             )
 
@@ -148,6 +150,7 @@ class ReplicaLogProcessorTest {
                 liveIndex,
                 mockk<Compactor.ForDatabase>(relaxed = true),
                 emptySet(),
+                watchers = Watchers(-1),
             )
 
             val now = Instant.now()

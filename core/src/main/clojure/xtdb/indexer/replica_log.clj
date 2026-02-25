@@ -1,7 +1,24 @@
 (ns xtdb.indexer.replica-log
   (:require [integrant.core :as ig]
             [xtdb.util :as util])
-  (:import [xtdb.database ReplicaIndexer]))
+  (:import [xtdb.api.log Watchers]
+           [xtdb.database DatabaseState DatabaseStorage ReplicaIndexer]
+           [xtdb.util MsgIdUtil]))
+
+(defmethod ig/expand-key ::watchers [k opts]
+  {k (into {:db-storage (ig/ref :xtdb.db-catalog/storage)}
+           opts)})
+
+(defmethod ig/init-key ::watchers [_ {:keys [^DatabaseStorage db-storage, ^DatabaseState db-state]}]
+  (let [block-catalog (.getBlockCatalog db-state)
+        epoch (.getEpoch (.getSourceLog db-storage))
+        latest-processed (some-> (.getLatestProcessedMsgId block-catalog)
+                                 (as-> msg-id
+                                       (if (= (MsgIdUtil/msgIdToEpoch msg-id) epoch)
+                                         msg-id
+                                         (dec (MsgIdUtil/offsetToMsgId epoch 0)))))]
+    (Watchers. (or latest-processed -1))))
+
 
 ;; Nested integrant sub-system that owns the replica indexer's state and services.
 ;; The parent db-system injects shared resources (allocator, buffer-pool, db-storage)
@@ -14,7 +31,8 @@
                               :db-state db-state
                               ;; compactor::for-db uses :state not :db-state
                               :state db-state))]
-    (-> {:xtdb.indexer/live-index (assoc child-opts :indexer-conf indexer-conf)
+    (-> {::watchers child-opts
+         :xtdb.indexer/live-index (assoc child-opts :indexer-conf indexer-conf)
          :xtdb.indexer/crash-logger child-opts
          :xtdb.tx-source/for-db (assoc child-opts :tx-source-conf tx-source-conf)
          :xtdb.indexer/for-db child-opts
@@ -28,11 +46,12 @@
   {k (into {:log-proc (ig/ref :xtdb.log/processor)
             :compactor (ig/ref :xtdb.compactor/for-db)
             :live-index (ig/ref :xtdb.indexer/live-index)
+            :watchers (ig/ref ::watchers)
             :tx-source (ig/ref :xtdb.tx-source/for-db)}
            opts)})
 
-(defmethod ig/init-key ::replica-indexer [_ {:keys [log-proc compactor db-state live-index tx-source]}]
-  (ReplicaIndexer. log-proc compactor db-state live-index tx-source))
+(defmethod ig/init-key ::replica-indexer [_ {:keys [log-proc compactor db-state live-index watchers tx-source]}]
+  (ReplicaIndexer. log-proc compactor db-state live-index watchers tx-source))
 
 (defmethod ig/expand-key :xtdb.indexer/replica-log [k opts]
   {k (into {:allocator (ig/ref :xtdb.db-catalog/allocator)

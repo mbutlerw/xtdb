@@ -173,13 +173,13 @@
 (defrecord TxSource [^BufferAllocator allocator ^Log output-log encode-fn ^BlockCatalog block-cat db-name last-tx-key]
   Indexer$TxSource
   (onCommit [_ resolved-tx]
-    (let [tx-key (serde/->TxKey (.getTxId resolved-tx)
-                                (time/micros->instant (.getSystemTimeMicros resolved-tx)))]
+    (let [system-time (time/micros->instant (.getSystemTimeMicros resolved-tx))
+          tx-key (serde/->TxKey (.getTxId resolved-tx) system-time)]
       (when (or (nil? last-tx-key) (gt tx-key last-tx-key))
         (let [table-data (.getTableData resolved-tx)]
           @(.appendMessage output-log
                            (-> {:transaction {:id tx-key}
-                                :system-time (.getSystemTime tx-key)
+                                :system-time system-time
                                 :source {:db db-name
                                          :block-idx (inc (or (.getCurrentBlockIndex block-cat) -1))}
                                 :tables (->> table-data
