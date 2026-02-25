@@ -98,9 +98,6 @@ class ReplicaLogProcessor @JvmOverloads constructor(
         if (msgIdToEpoch(it) == epoch) msgIdToOffset(it) else -1
     } ?: -1
 
-    override val latestSubmittedMsgId: MessageId
-        get() = offsetToMsgId(epoch, log.latestSubmittedOffset)
-
     private val watchers = Watchers(latestProcessedMsgId)
 
     override val ingestionError get() = watchers.exception

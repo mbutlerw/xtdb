@@ -155,7 +155,7 @@ data class Database(
             private suspend fun Database.await(msgId: MessageId) {
                 logProcessor.awaitAsync(msgId).await()
             }
-            private suspend fun Database.sync() = await(logProcessor.latestSubmittedMsgId)
+            private suspend fun Database.sync() = await(sourceLog.latestSubmittedMsgId)
 
             private suspend fun Catalog.awaitAll0(token: String) = coroutineScope {
                 val basis = token.decodeTxBasisToken()

@@ -13,7 +13,7 @@
            xtdb.table.TableRef
            (xtdb.trie Trie)))
 
-(defn reset-compactor! [node-opts db-name {:keys [dry-run?]}]
+(defn reset-compactor! [node-opts ^String db-name {:keys [dry-run?]}]
   (let [config (doto (xtn/->config node-opts)
                  (-> (.getCompactor) (.threads 0))
                  (.setServer nil)

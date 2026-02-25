@@ -126,7 +126,7 @@
   (let [db (.getPrimary db-cat)
         ^Server server (-> (handler {:meter-registry meter-registry
                                      :db db
-                                     :initial-target-message-id (.getLatestSubmittedMsgId (.getLogProcessor db))
+                                     :initial-target-message-id (.getLatestSubmittedMsgId (.getSourceLog db))
                                      :node node})
                            (j/run-jetty {:host (some-> host (.getHostAddress)), :port port, :async? true, :join? false}))]
 

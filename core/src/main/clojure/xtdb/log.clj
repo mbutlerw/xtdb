@@ -275,7 +275,7 @@
 (defn sync-db
   ([db] (sync-db db nil))
   ([^Database db, ^Duration timeout]
-   (let [msg-id (.getLatestSubmittedMsgId (.getLogProcessor db))]
+   (let [msg-id (.getLatestSubmittedMsgId (.getSourceLog db))]
      (await-db db msg-id timeout))))
 
 (defn await-node
