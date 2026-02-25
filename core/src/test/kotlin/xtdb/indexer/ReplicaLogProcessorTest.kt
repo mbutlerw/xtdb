@@ -79,7 +79,7 @@ class ReplicaLogProcessorTest {
 
     @Test
     fun `buffer overflow stops ingestion`() {
-        val log = InMemoryLog(InstantSource.system(), 0)
+        val log = InMemoryLog<Log.Message>(InstantSource.system(), 0)
         val blockCatalog = BlockCatalog("test", null)
         val liveIndex = mockk<LiveIndex>(relaxed = true)
 
@@ -118,7 +118,7 @@ class ReplicaLogProcessorTest {
 
     @Test
     fun `replay handles block transitions during replay`() {
-        val log = InMemoryLog(InstantSource.system(), 0)
+        val log = InMemoryLog<Log.Message>(InstantSource.system(), 0)
         val blockCatalog = BlockCatalog("test", null)
         val liveIndex = mockk<LiveIndex>(relaxed = true)
 

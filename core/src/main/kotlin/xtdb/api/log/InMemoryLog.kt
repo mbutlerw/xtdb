@@ -21,11 +21,11 @@ import kotlin.coroutines.CoroutineContext
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
-class InMemoryLog @JvmOverloads constructor(
+class InMemoryLog<M> @JvmOverloads constructor(
     private val instantSource: InstantSource,
     override val epoch: Int,
     coroutineContext: CoroutineContext = Dispatchers.Default
-) : Log {
+) : Log<M> {
     private val scope = CoroutineScope(coroutineContext)
 
     @SerialName("!InMemory")
@@ -40,7 +40,7 @@ class InMemoryLog @JvmOverloads constructor(
         fun coroutineContext(coroutineContext: CoroutineContext) = apply { this.coroutineContext = coroutineContext }
 
         override fun openLog(clusters: Map<LogClusterAlias, Cluster>) =
-            InMemoryLog(instantSource, epoch, coroutineContext)
+            InMemoryLog<Message>(instantSource, epoch, coroutineContext)
 
         override fun openReadOnlyLog(clusters: Map<LogClusterAlias, Cluster>) =
             ReadOnlyLog(openLog(clusters))
@@ -51,12 +51,12 @@ class InMemoryLog @JvmOverloads constructor(
     }
     private val subscriberScope = scope + SupervisorJob(scope.coroutineContext.job)
 
-    internal data class NewMessage(
-        val message: Message,
+    internal data class NewMessage<M>(
+        val message: M,
         val onCommit: CompletableDeferred<MessageMetadata>
     )
 
-    private val appendCh: Channel<NewMessage> = Channel(100)
+    private val appendCh: Channel<NewMessage<M>> = Channel(100)
     private val committedCh = appendCh.receiveAsFlow()
         .map { (message, onCommit) ->
             // we only use the instantSource for Tx messages so that the tests
@@ -73,19 +73,19 @@ class InMemoryLog @JvmOverloads constructor(
     override var latestSubmittedOffset: LogOffset = -1
         private set
 
-    override fun appendMessage(message: Message) =
+    override fun appendMessage(message: M) =
         scope.future {
             val res = CompletableDeferred<MessageMetadata>()
             appendCh.send(NewMessage(message, res))
             res.await()
         }
 
-    override fun openAtomicProducer(transactionalId: String) = object : AtomicProducer {
-        override fun openTx() = object : AtomicProducer.Tx {
-            private val buffer = mutableListOf<Pair<Message, CompletableFuture<MessageMetadata>>>()
+    override fun openAtomicProducer(transactionalId: String) = object : AtomicProducer<M> {
+        override fun openTx() = object : AtomicProducer.Tx<M> {
+            private val buffer = mutableListOf<Pair<M, CompletableFuture<MessageMetadata>>>()
             private var isOpen = true
 
-            override fun appendMessage(message: Message): CompletableFuture<MessageMetadata> {
+            override fun appendMessage(message: M): CompletableFuture<MessageMetadata> {
                 check(isOpen) { "Transaction already closed" }
                 val future = CompletableFuture<MessageMetadata>()
                 buffer.add(message to future)
@@ -114,9 +114,9 @@ class InMemoryLog @JvmOverloads constructor(
         override fun close() {}
     }
 
-    override fun readLastMessage(): Message? = null
+    override fun readLastMessage(): M? = null
 
-    override fun tailAll(subscriber: Subscriber, latestProcessedOffset: LogOffset): Subscription {
+    override fun tailAll(subscriber: Subscriber<M>, latestProcessedOffset: LogOffset): Subscription {
         val job = subscriberScope.launch {
             var latestCompletedOffset = latestProcessedOffset
             val ch = committedCh
@@ -132,7 +132,7 @@ class InMemoryLog @JvmOverloads constructor(
                 .produceIn(this)
 
             while (isActive) {
-                val records: List<Record> = select {
+                val records: List<Record<M>> = select {
                     ch.onReceiveCatching { if (it.isClosed) null else listOf(it.getOrThrow()) }
 
                     @OptIn(ExperimentalCoroutinesApi::class)
@@ -145,7 +145,7 @@ class InMemoryLog @JvmOverloads constructor(
         return Subscription { runBlocking { withTimeout(5.seconds) { job.cancelAndJoin() } } }
     }
 
-    override fun subscribe(subscriber: GroupSubscriber): Subscription {
+    override fun subscribe(subscriber: GroupSubscriber<M>): Subscription {
         val offsets = subscriber.onPartitionsAssigned(listOf(0))
         val nextOffset = offsets[0] ?: 0L
         val subscription = tailAll(subscriber, nextOffset - 1)

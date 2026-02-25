@@ -27,7 +27,12 @@ import java.util.concurrent.CompletableFuture
 import com.google.protobuf.Any as ProtoAny
 
 
-interface Log : AutoCloseable {
+interface MessageCodec<M> {
+    fun encode(message: M): ByteArray
+    fun decode(bytes: ByteArray): M?
+}
+
+interface Log<M> : AutoCloseable {
 
     interface Cluster : AutoCloseable {
 
@@ -53,10 +58,14 @@ interface Log : AutoCloseable {
 
         fun encode(): ByteArray
 
-        companion object {
+        companion object Codec : MessageCodec<Message> {
             private const val TX_HEADER: Byte = -1
             private const val LEGACY_FLUSH_BLOCK_HEADER: Byte = 2
             private const val PROTOBUF_HEADER: Byte = 3
+
+            override fun encode(message: Message): ByteArray = message.encode()
+
+            override fun decode(bytes: ByteArray): Message? = parse(bytes)
 
             @JvmStatic
             fun parse(bytes: ByteArray) =
@@ -223,8 +232,8 @@ interface Log : AutoCloseable {
     }
 
     interface Factory {
-        fun openLog(clusters: Map<LogClusterAlias, Cluster>): Log
-        fun openReadOnlyLog(clusters: Map<LogClusterAlias, Cluster>): Log
+        fun openLog(clusters: Map<LogClusterAlias, Cluster>): Log<Message>
+        fun openReadOnlyLog(clusters: Map<LogClusterAlias, Cluster>): Log<Message>
 
         fun writeTo(dbConfig: DatabaseConfig.Builder)
 
@@ -289,29 +298,29 @@ interface Log : AutoCloseable {
         val logTimestamp: LogTimestamp
     )
 
-    fun appendMessage(message: Message): CompletableFuture<MessageMetadata>
+    fun appendMessage(message: M): CompletableFuture<MessageMetadata>
 
     /**
      * @param transactionalId uniquely identifies this producer for Kafka's transaction coordinator.
      *   Must be stable across restarts for transaction recovery.
      */
-    fun openAtomicProducer(transactionalId: String): AtomicProducer
+    fun openAtomicProducer(transactionalId: String): AtomicProducer<M>
 
-    interface AtomicProducer : AutoCloseable {
-        fun openTx(): Tx
+    interface AtomicProducer<M> : AutoCloseable {
+        fun openTx(): Tx<M>
 
-        interface Tx : AutoCloseable {
-            fun appendMessage(message: Message): CompletableFuture<MessageMetadata>
+        interface Tx<M> : AutoCloseable {
+            fun appendMessage(message: M): CompletableFuture<MessageMetadata>
             fun commit()
             fun abort()
         }
     }
 
-    fun readLastMessage(): Message?
+    fun readLastMessage(): M?
 
-    fun tailAll(subscriber: Subscriber, latestProcessedOffset: LogOffset): Subscription
+    fun tailAll(subscriber: Subscriber<M>, latestProcessedOffset: LogOffset): Subscription
 
-    interface GroupSubscriber : Subscriber {
+    interface GroupSubscriber<in M> : Subscriber<M> {
         /**
          * @return Map of partition to next offset to consume from.
          *         Partitions not in the map use Kafka's default (committed offset or auto.offset.reset).
@@ -323,18 +332,18 @@ interface Log : AutoCloseable {
         fun onPartitionsLost(partitions: Collection<Int>) = onPartitionsRevoked(partitions)
     }
 
-    fun subscribe(subscriber: GroupSubscriber): Subscription
+    fun subscribe(subscriber: GroupSubscriber<M>): Subscription
 
     @FunctionalInterface
     fun interface Subscription : AutoCloseable
 
-    class Record(
+    class Record<out M>(
         val logOffset: LogOffset,
         val logTimestamp: Instant,
-        val message: Message
+        val message: M
     )
 
-    interface Subscriber {
-        fun processRecords(records: List<Record>)
+    interface Subscriber<in M> {
+        fun processRecords(records: List<Record<M>>)
     }
 }

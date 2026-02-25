@@ -51,7 +51,7 @@ class SourceLogProcessor(
     private val skipTxs: Set<MessageId>,
     private val readOnly: Boolean = false,
     flushTimeout: Duration = Duration.ofMinutes(5),
-) : Log.Subscriber {
+) : Log.Subscriber<Log.Message> {
 
     private val log = dbStorage.sourceLog
     private val epoch = log.epoch
@@ -104,7 +104,7 @@ class SourceLogProcessor(
 
     private val flusher = Flusher(flushTimeout, blockCatalog)
 
-    private fun resolveTx(msgId: MessageId, record: Log.Record, msg: Message.Tx): Message.ResolvedTx {
+    private fun resolveTx(msgId: MessageId, record: Log.Record<Message>, msg: Message.Tx): Message.ResolvedTx {
         return if (skipTxs.isNotEmpty() && skipTxs.contains(msgId)) {
             LOG.warn("Skipping transaction id $msgId - within XTDB_SKIP_TXS")
 
@@ -139,7 +139,7 @@ class SourceLogProcessor(
         }
     }
 
-    private fun finishBlock(systemTime: Instant): Log.Record {
+    private fun finishBlock(systemTime: Instant): Log.Record<Log.Message> {
         val blockIdx = (blockCatalog.currentBlockIndex ?: -1) + 1
         LOG.debug("finishing block: 'b${blockIdx.asLexHex}'...")
 
@@ -192,7 +192,7 @@ class SourceLogProcessor(
         return Log.Record(-1, systemTime, Message.BlockBoundary(blockIdx))
     }
 
-    override fun processRecords(records: List<Log.Record>) {
+    override fun processRecords(records: List<Log.Record<Log.Message>>) {
         if (!readOnly && flusher.checkBlockTimeout(blockCatalog, liveIndex)) {
             val flushMessage = Message.FlushBlock(blockCatalog.currentBlockIndex ?: -1)
             val offset = log.appendMessage(flushMessage).get().logOffset

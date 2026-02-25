@@ -25,11 +25,12 @@ import kotlin.Long.Companion.SIZE_BYTES as LONG_BYTES
  * A read-only version of LocalLog that watches the log file for new messages
  * written by another process (the primary cluster).
  */
-class ReadOnlyLocalLog(
+class ReadOnlyLocalLog<M>(
     private val rootPath: Path,
+    private val codec: MessageCodec<M>,
     override val epoch: Int,
     coroutineContext: CoroutineContext = Dispatchers.Default
-) : Log {
+) : Log<M> {
 
     private val scope = CoroutineScope(coroutineContext)
     private val logFilePath = rootPath.resolve("LOG")
@@ -67,34 +68,34 @@ class ReadOnlyLocalLog(
                     }
             }
         }
+    }
 
-        private fun FileChannel.readMessage(): Record? {
-            val pos = position()
-            val headerBuf = ByteBuffer.allocateDirect(1 + INT_BYTES + LONG_BYTES)
-                .also { read(it); it.flip() }
+    private fun FileChannel.readMessage(): Record<M>? {
+        val pos = position()
+        val headerBuf = ByteBuffer.allocateDirect(1 + INT_BYTES + LONG_BYTES)
+            .also { read(it); it.flip() }
 
-            check(headerBuf.get() == RECORD_SEPARATOR) { "log file corrupted at $pos - expected record separator" }
-            val size = headerBuf.getInt()
+        check(headerBuf.get() == RECORD_SEPARATOR) { "log file corrupted at $pos - expected record separator" }
+        val size = headerBuf.getInt()
 
-            val message =
-                Message.parse(ByteBuffer.allocate(size).also { read(it); it.flip() }.array())
-                    ?: return null
+        val message =
+            codec.decode(ByteBuffer.allocate(size).also { read(it); it.flip() }.array())
+                ?: return null
 
-            return Record(pos, fromMicros(headerBuf.getLong()), message)
-                .also { position(pos + messageSizeBytes(size)) }
-        }
+        return Record(pos, fromMicros(headerBuf.getLong()), message)
+            .also { position(pos + messageSizeBytes(size)) }
     }
 
     override val latestSubmittedOffset: LogOffset
         get() = readLatestSubmittedOffset(logFilePath)
 
-    override fun appendMessage(message: Message) =
+    override fun appendMessage(message: M) =
         throw Incorrect("Cannot append to read-only database log")
 
     override fun openAtomicProducer(transactionalId: String) =
         throw Incorrect("Cannot open atomic producer on read-only database log")
 
-    override fun readLastMessage(): Message? {
+    override fun readLastMessage(): M? {
         if (latestSubmittedOffset < 0) return null
 
         return FileChannel.open(logFilePath, READ).use { ch ->
@@ -103,7 +104,7 @@ class ReadOnlyLocalLog(
         }
     }
 
-    override fun tailAll(subscriber: Subscriber, latestProcessedOffset: LogOffset): Subscription {
+    override fun tailAll(subscriber: Subscriber<M>, latestProcessedOffset: LogOffset): Subscription {
         var currentOffset = latestProcessedOffset
 
         val subscription = scope.launch(SupervisorJob()) {
@@ -145,7 +146,7 @@ class ReadOnlyLocalLog(
         return Subscription { runBlocking { withTimeout(5.seconds) { subscription.cancelAndJoin() } } }
     }
 
-    override fun subscribe(subscriber: GroupSubscriber): Subscription {
+    override fun subscribe(subscriber: GroupSubscriber<M>): Subscription {
         val offsets = subscriber.onPartitionsAssigned(listOf(0))
         val nextOffset = offsets[0] ?: 0L
         val subscription = tailAll(subscriber, nextOffset - 1)
@@ -155,7 +156,7 @@ class ReadOnlyLocalLog(
         }
     }
 
-    private suspend fun readNewMessages(currentOffset: LogOffset, subscriber: Subscriber): LogOffset? {
+    private suspend fun readNewMessages(currentOffset: LogOffset, subscriber: Subscriber<M>): LogOffset? {
         val newLatestOffset = readLatestSubmittedOffset(logFilePath)
 
         if (newLatestOffset <= currentOffset) return null

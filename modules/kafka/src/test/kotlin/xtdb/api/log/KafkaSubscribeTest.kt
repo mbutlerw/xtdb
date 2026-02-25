@@ -44,8 +44,8 @@ class KafkaSubscribeTest {
 
         val assignedPartitions = AtomicReference<Collection<Int>>(null)
 
-        val subscriber = object : GroupSubscriber {
-            override fun processRecords(records: List<Record>) {}
+        val subscriber = object : GroupSubscriber<Message> {
+            override fun processRecords(records: List<Record<Message>>) {}
             override fun onPartitionsAssigned(partitions: Collection<Int>): Map<Int, LogOffset> {
                 assignedPartitions.set(partitions)
                 return emptyMap()
@@ -74,10 +74,10 @@ class KafkaSubscribeTest {
         val topicName = "test-topic-${UUID.randomUUID()}"
         val groupId = "test-group-${UUID.randomUUID()}"
 
-        val receivedRecords = Collections.synchronizedList(mutableListOf<Record>())
+        val receivedRecords = Collections.synchronizedList(mutableListOf<Record<Message>>())
 
-        val subscriber = object : GroupSubscriber {
-            override fun processRecords(records: List<Record>) {
+        val subscriber = object : GroupSubscriber<Message> {
+            override fun processRecords(records: List<Record<Message>>) {
                 receivedRecords.addAll(records)
             }
             override fun onPartitionsAssigned(partitions: Collection<Int>): Map<Int, LogOffset> {
@@ -119,8 +119,8 @@ class KafkaSubscribeTest {
         val revokedPartitions = AtomicReference<Collection<Int>>(null)
         val assigned = AtomicBoolean(false)
 
-        val subscriber = object : GroupSubscriber {
-            override fun processRecords(records: List<Record>) {}
+        val subscriber = object : GroupSubscriber<Message> {
+            override fun processRecords(records: List<Record<Message>>) {}
             override fun onPartitionsAssigned(partitions: Collection<Int>): Map<Int, LogOffset> {
                 assigned.set(true)
                 return emptyMap()
@@ -150,7 +150,7 @@ class KafkaSubscribeTest {
     fun `subscribe without groupId throws`() {
         val topicName = "test-topic-${UUID.randomUUID()}"
 
-        val subscriber = mockk<GroupSubscriber>()
+        val subscriber = mockk<GroupSubscriber<Message>>()
 
         KafkaCluster.ClusterFactory(container.bootstrapServers)
             .pollDuration(Duration.ofMillis(100))

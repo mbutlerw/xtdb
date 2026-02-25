@@ -13,7 +13,7 @@ import java.time.InstantSource
 import java.time.temporal.ChronoUnit
 import java.util.concurrent.CompletableFuture
 
-class RecordingLog(private val instantSource: InstantSource, messages: List<Log.Message>) : Log {
+class RecordingLog<M>(private val instantSource: InstantSource, messages: List<M>) : Log<M> {
     override val epoch = 0
     val messages = messages.toMutableList()
 
@@ -38,10 +38,9 @@ class RecordingLog(private val instantSource: InstantSource, messages: List<Log.
     override var latestSubmittedOffset: LogOffset = -1
         private set
 
-    override fun appendMessage(message: Log.Message): CompletableFuture<Log.MessageMetadata> {
+    override fun appendMessage(message: M): CompletableFuture<Log.MessageMetadata> {
         messages.add(message)
 
-        // See comment in InMemoryLog
         val ts = if (message is Log.Message.Tx) instantSource.instant() else Instant.now()
 
         return CompletableFuture.completedFuture(
@@ -52,14 +51,14 @@ class RecordingLog(private val instantSource: InstantSource, messages: List<Log.
         )
     }
 
-    override fun readLastMessage(): Log.Message? = messages.lastOrNull()
+    override fun readLastMessage(): M? = messages.lastOrNull()
 
-    override fun openAtomicProducer(transactionalId: String) = object : Log.AtomicProducer {
-        override fun openTx() = object : Log.AtomicProducer.Tx {
-            private val buffer = mutableListOf<Pair<Log.Message, CompletableFuture<Log.MessageMetadata>>>()
+    override fun openAtomicProducer(transactionalId: String) = object : Log.AtomicProducer<M> {
+        override fun openTx() = object : Log.AtomicProducer.Tx<M> {
+            private val buffer = mutableListOf<Pair<M, CompletableFuture<Log.MessageMetadata>>>()
             private var isOpen = true
 
-            override fun appendMessage(message: Log.Message): CompletableFuture<Log.MessageMetadata> {
+            override fun appendMessage(message: M): CompletableFuture<Log.MessageMetadata> {
                 check(isOpen) { "Transaction already closed" }
                 val future = CompletableFuture<Log.MessageMetadata>()
                 buffer.add(message to future)
@@ -89,11 +88,11 @@ class RecordingLog(private val instantSource: InstantSource, messages: List<Log.
     }
 
     override fun tailAll(
-        subscriber: Log.Subscriber,
+        subscriber: Log.Subscriber<M>,
         latestProcessedOffset: LogOffset
     ): Log.Subscription = error("tailAll")
 
-    override fun subscribe(subscriber: Log.GroupSubscriber): Log.Subscription {
+    override fun subscribe(subscriber: Log.GroupSubscriber<M>): Log.Subscription {
         val offsets = subscriber.onPartitionsAssigned(listOf(0))
         val nextOffset = offsets[0] ?: 0L
         val subscription = tailAll(subscriber, nextOffset - 1)

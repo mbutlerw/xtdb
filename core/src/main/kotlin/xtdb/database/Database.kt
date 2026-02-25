@@ -81,8 +81,8 @@ data class Database(
     val trieCatalog: TrieCatalog get() = queryState.trieCatalog
     val liveIndex: LiveIndex get() = replicaIndexer.liveIndex
 
-    val sourceLog: Log get() = storage.sourceLog
-    val replicaLog: Log get() = storage.replicaLog
+    val sourceLog: Log<Log.Message> get() = storage.sourceLog
+    val replicaLog: Log<Log.Message> get() = storage.replicaLog
     val bufferPool: BufferPool get() = storage.bufferPool
     val metadataManager: PageMetadata.Factory get() = storage.metadataManager
 

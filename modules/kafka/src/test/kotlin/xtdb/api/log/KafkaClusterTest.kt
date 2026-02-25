@@ -43,9 +43,9 @@ class KafkaClusterTest {
 
     @Test
     fun `round-trips messages`() = runTest(timeout = 30.seconds) {
-        val msgs = synchronizedList(mutableListOf<List<Record>>())
+        val msgs = synchronizedList(mutableListOf<List<Record<Message>>>())
 
-        val subscriber = mockk<Subscriber> {
+        val subscriber = mockk<Subscriber<Message>> {
             every { processRecords(capture(msgs)) } returns Unit
         }
 

@@ -39,9 +39,9 @@ class KafkaAtomicProducerTest {
     @Test
     fun `committed transaction messages are visible to subscribers`() = runTest(timeout = 60.seconds) {
         val topicName = "test-topic-${UUID.randomUUID()}"
-        val msgs = synchronizedList(mutableListOf<List<Record>>())
+        val msgs = synchronizedList(mutableListOf<List<Record<Message>>>())
 
-        val subscriber = mockk<Subscriber> {
+        val subscriber = mockk<Subscriber<Message>> {
             every { processRecords(capture(msgs)) } returns Unit
         }
 
@@ -81,9 +81,9 @@ class KafkaAtomicProducerTest {
     @Test
     fun `aborted transaction messages are not visible to subscribers`() = runTest(timeout = 60.seconds) {
         val topicName = "test-topic-${UUID.randomUUID()}"
-        val msgs = synchronizedList(mutableListOf<List<Record>>())
+        val msgs = synchronizedList(mutableListOf<List<Record<Message>>>())
 
-        val subscriber = mockk<Subscriber> {
+        val subscriber = mockk<Subscriber<Message>> {
             every { processRecords(capture(msgs)) } returns Unit
         }
 
@@ -129,9 +129,9 @@ class KafkaAtomicProducerTest {
     @Test
     fun `multiple sequential transactions on same producer`() = runTest(timeout = 60.seconds) {
         val topicName = "test-topic-${UUID.randomUUID()}"
-        val msgs = synchronizedList(mutableListOf<List<Record>>())
+        val msgs = synchronizedList(mutableListOf<List<Record<Message>>>())
 
-        val subscriber = mockk<Subscriber> {
+        val subscriber = mockk<Subscriber<Message>> {
             every { processRecords(capture(msgs)) } returns Unit
         }
 
@@ -178,9 +178,9 @@ class KafkaAtomicProducerTest {
     @Test
     fun `uncommitted transaction messages not visible until commit`() = runTest(timeout = 60.seconds) {
         val topicName = "test-topic-${UUID.randomUUID()}"
-        val msgs = synchronizedList(mutableListOf<List<Record>>())
+        val msgs = synchronizedList(mutableListOf<List<Record<Message>>>())
 
-        val subscriber = mockk<Subscriber> {
+        val subscriber = mockk<Subscriber<Message>> {
             every { processRecords(capture(msgs)) } returns Unit
         }
 

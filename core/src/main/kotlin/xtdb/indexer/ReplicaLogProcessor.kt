@@ -63,7 +63,7 @@ class ReplicaLogProcessor @JvmOverloads constructor(
     private val maxBufferedRecords: Int = 1024,
     private val dbCatalog: Database.Catalog? = null,
     private val txSource: Indexer.TxSource? = null
-) : LogProcessor, Log.Subscriber, AutoCloseable {
+) : LogProcessor, Log.Subscriber<Log.Message>, AutoCloseable {
 
     init {
         require((dbCatalog != null) == (dbState.name == "xtdb")) {
@@ -85,7 +85,7 @@ class ReplicaLogProcessor @JvmOverloads constructor(
     // Read-only block transition: when the live index is full, we buffer messages
     // until BlockUploaded arrives, then transition and replay.
     private var pendingBlockIdx: BlockIndex? = null
-    private val bufferedRecords: MutableList<Log.Record> = mutableListOf()
+    private val bufferedRecords: MutableList<Log.Record<Log.Message>> = mutableListOf()
 
     @Volatile
     override var latestProcessedMsgId: MessageId =
@@ -113,7 +113,7 @@ class ReplicaLogProcessor @JvmOverloads constructor(
         allocator.close()
     }
 
-    override fun processRecords(records: List<Log.Record>) = runBlocking {
+    override fun processRecords(records: List<Log.Record<Log.Message>>) = runBlocking {
         val queue = ArrayDeque(records)
 
         while (queue.isNotEmpty()) {
@@ -179,7 +179,7 @@ class ReplicaLogProcessor @JvmOverloads constructor(
         }
     }
 
-    private fun processRecord(msgId: MessageId, record: Log.Record): TransactionResult? {
+    private fun processRecord(msgId: MessageId, record: Log.Record<Log.Message>): TransactionResult? {
         LOG.debug("Processing message $msgId, ${record.message.javaClass.simpleName}")
 
         return when (val msg = record.message) {

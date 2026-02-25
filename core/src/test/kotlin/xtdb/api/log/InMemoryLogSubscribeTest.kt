@@ -17,8 +17,8 @@ class InMemoryLogSubscribeTest {
     fun `assignment callback fires immediately`() = runTest(timeout = 10.seconds) {
         val assignedPartitions = AtomicReference<Collection<Int>>(null)
 
-        val subscriber = object : GroupSubscriber {
-            override fun processRecords(records: List<Record>) {}
+        val subscriber = object : GroupSubscriber<Message> {
+            override fun processRecords(records: List<Record<Message>>) {}
             override fun onPartitionsAssigned(partitions: Collection<Int>): Map<Int, LogOffset> {
                 assignedPartitions.set(partitions)
                 return emptyMap()
@@ -36,10 +36,10 @@ class InMemoryLogSubscribeTest {
 
     @Test
     fun `returned offset determines start position`() = runTest(timeout = 10.seconds) {
-        val receivedRecords = Collections.synchronizedList(mutableListOf<Record>())
+        val receivedRecords = Collections.synchronizedList(mutableListOf<Record<Message>>())
 
-        val subscriber = object : GroupSubscriber {
-            override fun processRecords(records: List<Record>) {
+        val subscriber = object : GroupSubscriber<Message> {
+            override fun processRecords(records: List<Record<Message>>) {
                 receivedRecords.addAll(records)
             }
             override fun onPartitionsAssigned(partitions: Collection<Int>): Map<Int, LogOffset> {
@@ -70,8 +70,8 @@ class InMemoryLogSubscribeTest {
     fun `revocation callback fires on close`() {
         val revokedPartitions = AtomicReference<Collection<Int>>(null)
 
-        val subscriber = object : GroupSubscriber {
-            override fun processRecords(records: List<Record>) {}
+        val subscriber = object : GroupSubscriber<Message> {
+            override fun processRecords(records: List<Record<Message>>) {}
             override fun onPartitionsAssigned(partitions: Collection<Int>): Map<Int, LogOffset> {
                 return emptyMap()
             }
