@@ -1,7 +1,6 @@
 -- compaction.allium
 --
 -- Merges small tries into larger ones for better query performance.
--- Runs asynchronously, triggered after block flushes.
 -- The consumer of this work is the scan operator.
 -- It reads the trie catalog to understand which files it has to read for a given query.
 --
@@ -24,17 +23,13 @@
 --   Clean replacement: once the output file has been written, the input files no longer need to be read.
 --   We avoid needing to figure out which _parts_ of a file have been compacted.
 --
+-- This spec describes job selection and the compaction algorithm only.
+-- The message flow (how compaction is triggered and how results are registered)
+-- lives in db.allium.
+--
 -- See: compactor/Compactor.kt
 
-use "./db.allium" as db
 use "./trie-cat.allium" as trie_cat
-
-------------------------------------------------------------
--- Context
-------------------------------------------------------------
-
--- No persistent local entities; operates on db/database, trie_cat/trie_catalog and ObjectStore.
--- CompactionJob is ephemeral (created within rules).
 
 ------------------------------------------------------------
 -- External Entities
@@ -42,57 +37,6 @@ use "./trie-cat.allium" as trie_cat
 
 external entity ObjectStore {
     -- Durable key-value storage for blocks, tries, table-blocks.
-}
-
-------------------------------------------------------------
--- Entities
-------------------------------------------------------------
-
--- CompactionJob is ephemeral (coroutine-scoped, not persisted).
-
-entity CompactionJob {
-    table: trie_cat/TableRef
-    input_trie_keys: List<trie_cat/TrieKey>
-    output_tries: List<trie_cat/TrieDetails>
-    status: running | completed
-}
-
-------------------------------------------------------------
--- Rules
-------------------------------------------------------------
-
-rule CompactorWakesUp {
-    when: db/CompactorSignalled()
-
-    let jobs = available_jobs(trie_cat/trie_catalog)
-
-    ensures:
-        for each job in jobs:
-            CompactionJob.created(
-                table: job.table,
-                input_trie_keys: job.trie_keys,
-                status: running
-            )
-            StartCompactionJob(job)
-}
-
-rule CompactionJobCompletes {
-    when: StartCompactionJob(job)
-
-    ensures:
-        -- Write merged tries to object store.
-        -- Data file uploaded first; meta file presence is the completion marker.
-        -- Append tries-added to replica-log.
-        let tries_added = db/TriesAddedMessage.created(tries: job.output_tries)
-        tries_added appended to db/database.replica_log
-
-        -- Output tries are nascent until the full job group completes.
-        -- Input tries transition to garbage once outputs are live.
-
-        -- Eagerly register in trie catalog (idempotent).
-        trie_cat/trie_catalog.addTries(job.output_tries, tries_added.log_timestamp)
-
-        job.status = completed
 }
 
 ------------------------------------------------------------
@@ -142,7 +86,20 @@ rule CompactionJobCompletes {
 -- Same pattern for historical side.
 -- No 'is full' check needed at L2+ — files are assumed to stay ~100MB.
 
-deferred available_jobs             -- compaction job selection algorithm
+deferred available_jobs(trie_catalog: trie_cat/TrieCatalog) -> List<CompactionJob>
+    -- compaction job selection algorithm
+
+------------------------------------------------------------
+-- Entities
+------------------------------------------------------------
+
+-- CompactionJob is ephemeral (coroutine-scoped, not persisted).
+
+entity CompactionJob {
+    table: trie_cat/TableRef
+    input_trie_keys: List<trie_cat/TrieKey>
+    output_tries: List<trie_cat/TrieDetails>
+}
 
 ------------------------------------------------------------
 -- Compaction Algorithm
@@ -184,10 +141,8 @@ deferred available_jobs             -- compaction job selection algorithm
 --
 -- == Upload ==
 --
--- We construct the metadata file, then upload both to the object store.
 -- The data file is uploaded first.
--- The presence of the meta file is the marker that the job is completed.
--- We then submit a tries-added message to the log of the primary database.
+-- The presence of the meta file is the marker that the segment is complete.
 
 ------------------------------------------------------------
 -- Open Questions

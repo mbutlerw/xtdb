@@ -2,12 +2,14 @@
 --
 -- The processing model of a single database within an XTDB node:
 -- transaction submission → log processing → block flushing → query.
--- Compaction is specified separately: see compaction.allium.
+-- Compaction job selection and algorithm are specified in compaction.allium;
+-- the compaction message flow is here.
 --
 -- Scope: one database (e.g. "xtdb" or a secondary).
 -- External: the multi-database orchestration layer (attach/detach).
 
 use "./trie-cat.allium" as trie_cat
+use "./compaction.allium" as compaction
 
 ------------------------------------------------------------
 -- Context
@@ -169,7 +171,7 @@ variant BlockUploadedMessage : Message {
     -- See: log/proto/log.proto (BlockUploaded)
     block_index: Long
     latest_processed_msg_id: MessageId
-    storage_epoch: StorageEpoch
+    storage_epoch: Int
 }
 
 variant AttachDbMessage : Message {
@@ -297,7 +299,7 @@ rule LeaderFinishesBlock {
         table_catalog.finishBlock(finished_tables)
 
         -- Persist block to object store.
-        Block.created(
+        let block = Block.created(
             block_index: block_index,
             latest_completed_tx: live_index.latest_completed_tx,
             latest_processed_msg_id: log_processor.latest_processed_msg_id
@@ -309,7 +311,7 @@ rule LeaderFinishesBlock {
         let block_uploaded = BlockUploadedMessage.created(
             block_index: block_index,
             latest_processed_msg_id: log_processor.latest_processed_msg_id,
-            storage_epoch: buffer_pool.epoch
+            storage_epoch: current_storage_epoch
         )
         block_uploaded appended to database.source_log
 
@@ -332,7 +334,7 @@ rule FollowerBuffersUntilBlockEnd {
     ensures:
         let (buffered, msg) = consumeUntil BlockUploadedMessage from database.source_log
             where msg.block_index == block_index
-              and msg.storage_epoch == buffer_pool.epoch
+              and msg.storage_epoch == current_storage_epoch
 
         FollowerProcessesBlockEnd(block_index, buffered)
 }
@@ -350,6 +352,36 @@ rule FollowerProcessesBlockEnd {
         -- Replay buffered messages into the new live index.
         for each buffered_msg in buffered:
             ProcessMessage(buffered_msg)
+}
+
+
+-- == Compaction Orchestration ==
+--
+-- The compactor runs asynchronously, triggered after block flushes.
+-- Job selection and the merge algorithm are specified in compaction.allium;
+-- this section handles triggering, message flow, and catalog registration.
+
+rule CompactorWakesUp {
+    when: CompactorSignalled()
+
+    let jobs = compaction/available_jobs(trie_cat/trie_catalog)
+
+    ensures:
+        for each job in jobs:
+            StartCompactionJob(job)
+}
+
+rule CompactionJobCompletes {
+    when: StartCompactionJob(job)
+
+    ensures:
+        -- Data file uploaded first; meta file presence is the completion marker.
+        -- Append tries-added to replica-log.
+        let tries_added = TriesAddedMessage.created(tries: job.output_tries)
+        tries_added appended to database.replica_log
+
+        -- Eagerly register in trie catalog (idempotent).
+        trie_cat/trie_catalog.addTries(job.output_tries, tries_added.log_timestamp)
 }
 
 
@@ -444,5 +476,4 @@ deferred IndexTransaction           -- transaction resolution (put/delete/erase 
 -- Open Questions
 ------------------------------------------------------------
 
-open_question "Should the flush timeout be per-database or global?"
 open_question "What happens if a read-only node's latestProcessedMsgId is behind the block? (currently a Fault)"
