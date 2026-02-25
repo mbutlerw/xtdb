@@ -4,6 +4,7 @@
             [xtdb.db-catalog :as db]
             [xtdb.util :as util])
   (:import xtdb.api.CompactorConfig
+           xtdb.api.log.Watchers
            (xtdb.compactor Compactor Compactor$Driver Compactor$Impl)
            (xtdb.database Database$Mode)))
 
@@ -32,13 +33,14 @@
 
 (defmethod ig/expand-key ::for-db [k opts]
   {k (into {:allocator (ig/ref :xtdb.db-catalog/allocator)
-            :storage (ig/ref :xtdb.db-catalog/storage)}
+            :storage (ig/ref :xtdb.db-catalog/storage)
+            :watchers (ig/ref :xtdb.indexer.replica-log/watchers)}
            opts)})
 
-(defmethod ig/init-key ::for-db [_ {{:keys [^Compactor compactor]} :base, :keys [allocator storage state ^Database$Mode mode]}]
+(defmethod ig/init-key ::for-db [_ {{:keys [^Compactor compactor]} :base, :keys [allocator storage state ^Database$Mode mode ^Watchers watchers]}]
   (if (= mode Database$Mode/READ_ONLY)
-    (.openForDatabase Compactor/NOOP allocator storage state)
-    (.openForDatabase compactor allocator storage state)))
+    (.openForDatabase Compactor/NOOP allocator storage state watchers)
+    (.openForDatabase compactor allocator storage state watchers)))
 
 (defmethod ig/halt-key! ::for-db [_ compactor-for-db]
   (util/close compactor-for-db))

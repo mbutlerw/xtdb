@@ -11,6 +11,7 @@ import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.time.withTimeout
 import xtdb.api.log.Log
 import xtdb.api.log.Log.Message.TriesAdded
+import xtdb.api.log.Watchers
 import xtdb.api.storage.Storage
 import xtdb.arrow.Relation
 import xtdb.compactor.PageTree.Companion.asTree
@@ -23,6 +24,7 @@ import xtdb.segment.BufferPoolSegment
 import xtdb.table.TableRef
 import xtdb.trie.*
 import xtdb.util.*
+import xtdb.util.MsgIdUtil
 import java.nio.channels.ClosedByInterruptException
 import java.time.Duration
 import kotlin.time.Duration.Companion.seconds
@@ -58,25 +60,25 @@ interface Compactor : AutoCloseable {
         }
     }
 
-    fun openForDatabase(allocator: BufferAllocator, dbStorage: DatabaseStorage, dbState: DatabaseState): ForDatabase
+    fun openForDatabase(allocator: BufferAllocator, dbStorage: DatabaseStorage, dbState: DatabaseState, watchers: Watchers): ForDatabase
 
     interface Driver : AutoCloseable {
         suspend fun executeJob(job: Job): TriesAdded
-        suspend fun appendMessage(triesAdded: TriesAdded): Log.MessageMetadata
+        suspend fun publishTries(triesAdded: TriesAdded)
 
         interface Factory {
-            fun create(allocator: BufferAllocator, dbStorage: DatabaseStorage, dbState: DatabaseState): Driver
+            fun create(allocator: BufferAllocator, dbStorage: DatabaseStorage, dbState: DatabaseState, watchers: Watchers): Driver
         }
 
         companion object {
             @JvmStatic
             fun real(meterRegistry: MeterRegistry?, pageSize: Int, recencyPartition: RecencyPartition?) =
                 object : Factory {
-                    override fun create(allocator: BufferAllocator, dbStorage: DatabaseStorage, dbState: DatabaseState) = object : Driver {
+                    override fun create(allocator: BufferAllocator, dbStorage: DatabaseStorage, dbState: DatabaseState, watchers: Watchers) = object : Driver {
                         private val al = allocator.openChildAllocator("compactor")
                             .also { meterRegistry?.register(it) }
 
-                        private val log = dbStorage.replicaLog
+                        private val log = dbStorage.sourceLog
                         private val bp = dbStorage.bufferPool
                         private val mm = dbStorage.metadataManager
 
@@ -135,8 +137,11 @@ interface Compactor : AutoCloseable {
                                 throw e
                             }
 
-                        override suspend fun appendMessage(triesAdded: TriesAdded): Log.MessageMetadata =
-                            log.appendMessage(triesAdded).await()
+                        override suspend fun publishTries(triesAdded: TriesAdded) {
+                            val metadata = log.appendMessage(triesAdded).await()
+                            val msgId = MsgIdUtil.offsetToMsgId(log.epoch, metadata.logOffset)
+                            watchers.awaitAsync(msgId).await()
+                        }
 
                         override fun close() {
                             segMerge.close()
@@ -159,14 +164,14 @@ interface Compactor : AutoCloseable {
 
         private val jobsDispatcher = dispatcher.limitedParallelism(threadCount, "compactor")
 
-        override fun openForDatabase(allocator: BufferAllocator, dbStorage: DatabaseStorage, dbState: DatabaseState) = object : ForDatabase {
+        override fun openForDatabase(allocator: BufferAllocator, dbStorage: DatabaseStorage, dbState: DatabaseState, watchers: Watchers) = object : ForDatabase {
 
             private val dbJob = Job()
             private val scope = CoroutineScope(dbJob + dispatcher)
 
             private val trieCatalog = dbState.trieCatalog
 
-            val driver = driverFactory.create(allocator, dbStorage, dbState)
+            val driver = driverFactory.create(allocator, dbStorage, dbState, watchers)
 
             @Volatile
             private var availableJobs = emptyMap<JobKey, Job>()
@@ -215,15 +220,7 @@ interface Compactor : AutoCloseable {
                                         val timer = meterRegistry?.let { Timer.start(it) }
                                         val triesAdded = driver.executeJob(job)
                                         jobTimer?.let { timer?.stop(it) }
-                                        val messageMetadata = driver.appendMessage(triesAdded)
-
-                                        // add the trie to the catalog eagerly so that it's present
-                                        // next time we run `availableJobs` (it's idempotent)
-                                        trieCatalog.addTries(
-                                            job.table,
-                                            triesAdded.tries,
-                                            messageMetadata.logTimestamp
-                                        )
+                                        driver.publishTries(triesAdded)
 
                                         LOGGER.debug {
                                             buildString {
@@ -283,7 +280,7 @@ interface Compactor : AutoCloseable {
     companion object {
         @JvmField
         val NOOP = object : Compactor {
-            override fun openForDatabase(allocator: BufferAllocator, dbStorage: DatabaseStorage, dbState: DatabaseState) = object : ForDatabase {
+            override fun openForDatabase(allocator: BufferAllocator, dbStorage: DatabaseStorage, dbState: DatabaseState, watchers: Watchers) = object : ForDatabase {
                 override fun signalBlock() = Unit
                 override suspend fun compactAll() = Unit
                 override fun close() = Unit

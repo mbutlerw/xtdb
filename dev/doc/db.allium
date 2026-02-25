@@ -376,12 +376,9 @@ rule CompactionJobCompletes {
 
     ensures:
         -- Data file uploaded first; meta file presence is the completion marker.
-        -- Append tries-added to replica-log.
+        -- Append tries-added to source-log; source processor will forward to replica.
         let tries_added = TriesAddedMessage.created(tries: job.output_tries)
-        tries_added appended to database.replica_log
-
-        -- Eagerly register in trie catalog (idempotent).
-        trie_cat/trie_catalog.addTries(job.output_tries, tries_added.log_timestamp)
+        tries_added appended to database.source_log
 }
 
 
