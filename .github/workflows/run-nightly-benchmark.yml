@@ -141,16 +141,6 @@ on:
         required: false
         default: ''
         type: string
-      scan_perf_n_items:
-        description: 'Number of items for scan-perf benchmark'
-        required: false
-        default: ''
-        type: string
-      scan_perf_id_type:
-        description: 'ID type for scan-perf benchmark (uuid, string, keyword)'
-        required: false
-        default: ''
-        type: string
       run_queue:
         description: 'Whether this run is part of the nightly benchmark queue'
         required: false
@@ -340,8 +330,6 @@ jobs:
           FUSION_READING_COUNT: ${{ inputs.fusion_reading_count }}
           FUSION_DURATION: ${{ inputs.fusion_duration }}
           FUSION_THREADS: ${{ inputs.fusion_threads }}
-          SCAN_PERF_N_ITEMS: ${{ inputs.scan_perf_n_items }}
-          SCAN_PERF_ID_TYPE: ${{ inputs.scan_perf_id_type }}
           RUN_QUEUE: ${{ inputs.run_queue }}
         run: |
           helm dependency update ./modules/bench/cloud/helm
@@ -432,13 +420,6 @@ jobs:
           fi
           if [ -n "$FUSION_THREADS" ]; then
             HELM_ARGS+=(--set "fusion.threads=${FUSION_THREADS}")
-          fi
-          if [ -n "$SCAN_PERF_N_ITEMS" ]; then
-            HELM_ARGS+=(--set "scan-perf.nItems=${SCAN_PERF_N_ITEMS}")
-            HELM_ARGS+=(--set "scan-perf-str.nItems=${SCAN_PERF_N_ITEMS}")
-          fi
-          if [ -n "$SCAN_PERF_ID_TYPE" ]; then
-            HELM_ARGS+=(--set "scan-perf.idType=${SCAN_PERF_ID_TYPE}")
           fi
           if [ "$RUN_QUEUE" = "true" ]; then
             HELM_ARGS+=(--set "providerConfig.env.RUN_QUEUE=true")
@@ -559,8 +540,6 @@ jobs:
           FUSION_READING_COUNT: ${{ inputs.fusion_reading_count }}
           FUSION_DURATION: ${{ inputs.fusion_duration }}
           FUSION_THREADS: ${{ inputs.fusion_threads }}
-          SCAN_PERF_N_ITEMS: ${{ inputs.scan_perf_n_items }}
-          SCAN_PERF_ID_TYPE: ${{ inputs.scan_perf_id_type }}
           GIT_SHA: ${{ github.sha }}
           GIT_BRANCH: ${{ inputs.branch }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
@@ -600,8 +579,6 @@ jobs:
           [ -n "$FUSION_READING_COUNT" ] && CONFIG_PARTS+=("Readings: ${FUSION_READING_COUNT}")
           [ -n "$FUSION_DURATION" ] && CONFIG_PARTS+=("Duration: ${FUSION_DURATION}")
           [ -n "$FUSION_THREADS" ] && CONFIG_PARTS+=("Threads: ${FUSION_THREADS}")
-          [ -n "$SCAN_PERF_N_ITEMS" ] && CONFIG_PARTS+=("N Items: ${SCAN_PERF_N_ITEMS}")
-          [ -n "$SCAN_PERF_ID_TYPE" ] && CONFIG_PARTS+=("ID Type: ${SCAN_PERF_ID_TYPE}")
           # Join with " | "
           if [ ${#CONFIG_PARTS[@]} -gt 0 ]; then
             CONFIG_INFO=$(printf " | %s" "${CONFIG_PARTS[@]}")

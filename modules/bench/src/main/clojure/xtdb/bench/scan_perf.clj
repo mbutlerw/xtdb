@@ -258,69 +258,6 @@
                  (let [{:keys [profiles]} @!state]
                    (b/log-report worker {:profiles profiles})))}]})
 
-(defmethod b/cli-flags :scan-perf-str [_]
-  [["-n" "--n-items N_ITEMS" "Number of items to generate"
-    :parse-fn parse-long
-    :default 10000000]
-   ["-h" "--help"]])
-
-(defmethod b/->benchmark :scan-perf-str [_ {:keys [n-items seed no-load?]
-                                              :or {n-items 10000000 seed 0}}]
-  (let [id-type :string]
-    (log/info {:n-items n-items :id-type id-type :seed seed :no-load? no-load?})
-
-    {:title "Scan Perf Str"
-     :benchmark-type :scan-perf-str
-     :seed seed
-     :parameters {:n-items n-items :id-type id-type :seed seed :no-load? no-load?}
-     :->state #(do {:!state (atom {})})
-     :tasks [(when-not no-load?
-               {:t :do
-                :stage :ingest
-                :tasks [{:t :call
-                         :stage :submit-docs
-                         :f (fn [{:keys [node random]}]
-                              (with-open [conn (get-conn node)]
-                                (scan-items/load-data! conn random n-items id-type)))}
-                        {:t :call
-                         :stage :await-transactions
-                         :f (fn [{:keys [node]}] (b/sync-node node))}
-                        {:t :call
-                         :stage :flush-block
-                         :f (fn [{:keys [node]}] (tu/flush-block! node))}]})
-
-             {:t :call
-              :stage :compact
-              :f (fn [{:keys [node]}] (c/compact-all! node nil))}
-
-             {:t :call
-              :stage :get-query-data
-              :f (fn [{:keys [node !state]}]
-                   (with-open [conn (get-conn node)]
-                     (swap! !state assoc :distributed-items (get-distributed-items conn))))}
-
-             {:t :call
-              :stage :profile-scan-points
-              :f (fn [{:keys [node !state]}]
-                   (let [{:keys [distributed-items]} @!state
-                         {:keys [profile formatted]} (profile node 50 (scan-items-point-benchmark-queries distributed-items))]
-                     (swap! !state update :profiles assoc :scan-points profile)
-                     (println formatted)))}
-
-             {:t :call
-              :stage :profile-scan-sets
-              :f (fn [{:keys [node !state]}]
-                   (let [{:keys [distributed-items]} @!state
-                         {:keys [profile formatted]} (profile node 50 (scan-items-set-benchmark-queries distributed-items))]
-                     (swap! !state update :profiles assoc :scan-sets profile)
-                     (println formatted)))}
-
-             {:t :call
-              :stage :output-profile-data
-              :f (fn [{:keys [!state] :as worker}]
-                   (let [{:keys [profiles]} @!state]
-                     (b/log-report worker {:profiles profiles})))}]}))
-
 (comment
   (try
     (let [random (java.util.Random. 0)

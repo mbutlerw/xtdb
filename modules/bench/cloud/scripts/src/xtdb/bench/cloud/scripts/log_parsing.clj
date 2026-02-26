@@ -238,9 +238,6 @@
      :benchmark-total-time-ms benchmark-total-time-ms
      :benchmark-summary benchmark-summary}))
 
-(defmethod parse-log "scan-perf-str" [_ log-file-path]
-  (parse-log "scan-perf" log-file-path))
-
 (defn load-summary
   "Load and parse a benchmark log file, returning summary with benchmark type."
   [benchmark-type log-file-path]

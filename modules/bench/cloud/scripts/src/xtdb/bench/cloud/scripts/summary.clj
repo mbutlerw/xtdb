@@ -327,9 +327,6 @@
          "\n\n"
          (rows->string [:query :n :p50 :p90 :p99 :mean :percent-of-total] rows))))
 
-(defmethod summary->table "scan-perf-str" [summary]
-  (summary->table (assoc summary :benchmark-type "scan-perf")))
-
 ;; summary->slack multimethod
 
 (defmulti summary->slack :benchmark-type)
@@ -443,9 +440,6 @@
        "\n\n"
        (util/wrap-slack-code
         (rows->string [:query :p50 :p99 :mean] rows))))))
-
-(defmethod summary->slack "scan-perf-str" [summary]
-  (summary->slack (assoc summary :benchmark-type "scan-perf")))
 
 ;; summary->github-markdown multimethod
 
@@ -566,9 +560,6 @@
     (str (util/github-table columns rows)
          "\n\n"
          (util/totals->string total-ms (:benchmark-total-time-ms summary)))))
-
-(defmethod summary->github-markdown "scan-perf-str" [summary]
-  (summary->github-markdown (assoc summary :benchmark-type "scan-perf")))
 
 ;; Render summary
 
