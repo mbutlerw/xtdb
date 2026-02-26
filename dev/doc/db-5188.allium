@@ -28,6 +28,7 @@ context {
     replica_processor: ReplicaProcessor     -- all nodes
     source_live_index: LiveIndex            -- leader's live index
     replica_live_index: LiveIndex           -- replica's live index (all nodes)
+    watchers: Watchers                     -- correlates submit-tx with replica processing
     block_catalog: BlockCatalog
     table_catalog: TableCatalog
 }
@@ -102,9 +103,14 @@ entity ReplicaProcessor {
     -- Applies resolved transactions, handles block transitions, updates catalogs.
     latest_processed_msg_id: MessageId
     pending_block_index: Long?
+}
 
-    -- Watchers: clients await by source-log tx id (the id returned by submit-tx).
-    -- ResolvedTxMessage carries the source tx_id for this mapping.
+entity Watchers {
+    -- Correlates source-log message IDs with client futures.
+    -- Clients receive the source-log msg_id from submit-tx;
+    -- Watchers notifies them when ReplicaProcessor processes the corresponding ResolvedTx.
+    -- See: api/log/Watchers.kt
+    current_msg_id: MessageId
 }
 
 external value current_storage_version: Int   -- See: storage/Storage.kt (VERSION)
@@ -140,6 +146,21 @@ value Snapshot {
 
 value TableMetadata {
     row_count: Long?
+}
+
+value DbOp {
+    -- A database-level side-effect carried within a ResolvedTx.
+    -- See: api/log/DbOp.kt
+    kind: Attach | Detach
+}
+
+variant Attach : DbOp {
+    db_name: String
+    config: DatabaseConfig
+}
+
+variant Detach : DbOp {
+    db_name: String
 }
 
 ------------------------------------------------------------
@@ -206,10 +227,11 @@ variant ResolvedTxMessage : ReplicaMessage {
     -- A resolved transaction: put/delete/erase events that require no database reads.
     -- Carries the source tx_id so watchers can correlate with submit-tx responses.
     -- Attach/detach results are encoded as a dbOp field within the resolved tx.
-    -- See: api/log/Log.kt (Message.ResolvedTx)
+    -- See: api/log/Log.kt (Message.ResolvedTx), api/log/ReplicaMessage.kt (ResolvedTx)
     tx_id: MessageId            -- source-log msg id of the original Tx/Attach/Detach
     committed: Boolean
     db_op: DbOp?               -- Attach or Detach side-effect, if any
+    table_data: Map<String, Bytes>  -- resolved row data per table, serialized; imported by replica processor
 }
 
 variant BlockBoundaryMessage : ReplicaMessage {
@@ -450,7 +472,7 @@ rule ReplicaProcessesResolvedTx {
 
         -- Notify watchers using the source-log tx id.
         replica_processor.latest_processed_msg_id = msg.tx_id
-        NotifyWatchers(msg.tx_id, result)
+        watchers.notify(msg.tx_id, result)
 }
 
 rule ReplicaProcessesTriesAdded {
