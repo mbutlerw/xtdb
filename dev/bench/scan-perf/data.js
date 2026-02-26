@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1772109012870,
+  "lastUpdate": 1772110983938,
   "repoUrl": "https://github.com/mbutlerw/xtdb",
   "entries": {
     "Benchmark": [
@@ -93,6 +93,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "summary (n=100000,id=uuid)",
             "value": 34919,
+            "unit": "ms"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Matt Butler",
+            "username": "mbutlerw",
+            "email": "mattb-w@hotmail.co.uk"
+          },
+          "committer": {
+            "name": "Matt Butler",
+            "username": "mbutlerw",
+            "email": "mattb-w@hotmail.co.uk"
+          },
+          "id": "d8abeccd562adbd4d3e4ee131d659d661910f02c",
+          "message": "fixup: give workflow write perms",
+          "timestamp": "2026-02-26T11:59:38Z",
+          "url": "https://github.com/mbutlerw/xtdb/commit/d8abeccd562adbd4d3e4ee131d659d661910f02c"
+        },
+        "date": 1772110981932,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "profile-scan-points (n=10000000,id=uuid)",
+            "value": 2137,
+            "unit": "ms"
+          },
+          {
+            "name": "profile-scan-sets (n=10000000,id=uuid)",
+            "value": 52217,
+            "unit": "ms"
+          },
+          {
+            "name": "profile-scan-content-key (n=10000000,id=uuid)",
+            "value": 368513,
+            "unit": "ms"
+          },
+          {
+            "name": "profile-scan-filters (n=10000000,id=uuid)",
+            "value": 396557,
+            "unit": "ms"
+          },
+          {
+            "name": "summary (n=10000000,id=uuid)",
+            "value": 1321239,
             "unit": "ms"
           }
         ]
