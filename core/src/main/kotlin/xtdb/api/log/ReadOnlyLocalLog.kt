@@ -29,11 +29,12 @@ class ReadOnlyLocalLog<M>(
     private val rootPath: Path,
     private val codec: MessageCodec<M>,
     override val epoch: Int,
-    coroutineContext: CoroutineContext = Dispatchers.Default
+    coroutineContext: CoroutineContext = Dispatchers.Default,
+    private val logFileName: String = "LOG"
 ) : Log<M> {
 
     private val scope = CoroutineScope(coroutineContext)
-    private val logFilePath = rootPath.resolve("LOG")
+    private val logFilePath = rootPath.resolve(logFileName)
 
     companion object {
         private fun messageSizeBytes(size: Int) = 1 + INT_BYTES + LONG_BYTES + size + LONG_BYTES
@@ -122,7 +123,7 @@ class ReadOnlyLocalLog<M>(
                         var logModified = false
                         for (event in key.pollEvents()) {
                             val changedPath = event.context() as? Path
-                            if (changedPath?.name == "LOG") {
+                            if (changedPath?.name == logFileName) {
                                 logModified = true
                             }
                         }

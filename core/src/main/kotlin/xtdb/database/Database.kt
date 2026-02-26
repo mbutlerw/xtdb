@@ -14,6 +14,7 @@ import org.apache.arrow.memory.BufferAllocator
 import xtdb.api.TransactionResult
 import xtdb.api.YAML_SERDE
 import xtdb.api.log.Log
+import xtdb.api.log.ReplicaMessage
 import xtdb.api.log.SourceMessage
 import xtdb.api.log.MessageId
 import xtdb.api.log.Watchers
@@ -81,7 +82,7 @@ data class Database(
     val liveIndex: LiveIndex get() = replicaIndexer.liveIndex
 
     val sourceLog: Log<SourceMessage> get() = storage.sourceLog
-    val replicaLog: Log<SourceMessage> get() = storage.replicaLog
+    val replicaLog: Log<ReplicaMessage> get() = storage.replicaLog
     val bufferPool: BufferPool get() = storage.bufferPool
     val metadataManager: PageMetadata.Factory get() = storage.metadataManager
 

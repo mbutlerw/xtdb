@@ -72,7 +72,7 @@
          :xtdb.metadata/metadata-manager opts
          :xtdb/log (assoc opts :factory (.getLog db-config) :mode mode)
          :xtdb/source-log opts
-         :xtdb/replica-log opts
+         :xtdb/replica-log (assoc opts :factory (.getLog db-config) :mode mode)
          :xtdb/buffer-pool (assoc opts :factory (.getStorage db-config) :mode mode)
 
          ::storage opts

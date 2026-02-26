@@ -44,18 +44,16 @@ class LocalLog<M>(
     private val instantSource: InstantSource,
     override val epoch: Int,
     val useInstantSourceForNonTx: Boolean,
-    coroutineContext: CoroutineContext = Dispatchers.Default
+    coroutineContext: CoroutineContext = Dispatchers.Default,
+    logFileName: String = "LOG"
 ) : Log<M> {
     private val scope = CoroutineScope(coroutineContext)
     companion object {
-        private val Path.logFilePath get() = resolve("LOG")
-
         private fun messageSizeBytes(size: Int) = 1 + INT_BYTES + LONG_BYTES + size + LONG_BYTES
 
         private const val RECORD_SEPARATOR = 0x1E.toByte()
 
-        private fun readLatestSubmittedOffset(path: Path): LogOffset {
-            val logFilePath = path.logFilePath
+        private fun readLatestSubmittedOffset(logFilePath: Path): LogOffset {
             if (!logFilePath.exists()) return -1
 
             return FileChannel.open(logFilePath).use { ch ->
@@ -116,7 +114,7 @@ class LocalLog<M>(
 
     private val appendCh = Channel<NewMessage<M>>(capacity = 10)
 
-    private val logFilePath = rootPath.logFilePath
+    private val logFilePath = rootPath.resolve(logFileName)
 
     private val logFileChannel =
         FileChannel.open(logFilePath.createParentDirectories(), CREATE, WRITE, APPEND)
@@ -159,7 +157,7 @@ class LocalLog<M>(
     }
 
     @Volatile
-    override var latestSubmittedOffset: LogOffset = readLatestSubmittedOffset(rootPath)
+    override var latestSubmittedOffset: LogOffset = readLatestSubmittedOffset(logFilePath)
         private set
 
     @Volatile
@@ -361,6 +359,9 @@ class LocalLog<M>(
 
         override fun openReadOnlySourceLog(clusters: Map<LogClusterAlias, Cluster>) =
             ReadOnlyLocalLog(path, SourceMessage.Codec, epoch, coroutineContext)
+
+        override fun openReplicaLog(clusters: Map<LogClusterAlias, Cluster>) =
+            LocalLog(path, ReplicaMessage.Codec, instantSource, epoch, useInstantSourceForNonTx, coroutineContext, logFileName = "REPLICA_LOG")
 
         override fun writeTo(dbConfig: DatabaseConfig.Builder) {
             dbConfig.localLog = localLog {

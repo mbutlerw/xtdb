@@ -50,6 +50,7 @@ interface Log<M> : AutoCloseable {
     interface Factory {
         fun openSourceLog(clusters: Map<LogClusterAlias, Cluster>): Log<SourceMessage>
         fun openReadOnlySourceLog(clusters: Map<LogClusterAlias, Cluster>): Log<SourceMessage>
+        fun openReplicaLog(clusters: Map<LogClusterAlias, Cluster>): Log<ReplicaMessage>
 
         fun writeTo(dbConfig: DatabaseConfig.Builder)
 

@@ -361,11 +361,15 @@ class KafkaCluster(
     data class LogFactory @JvmOverloads constructor(
         val cluster: LogClusterAlias,
         val topic: String,
+        var replicaCluster: LogClusterAlias = cluster,
+        var replicaTopic: String = "$topic-replica",
         var autoCreateTopic: Boolean = true,
         var epoch: Int = 0,
         var groupId: String? = null
     ) : Factory {
 
+        fun replicaCluster(replicaCluster: LogClusterAlias) = apply { this.replicaCluster = replicaCluster }
+        fun replicaTopic(replicaTopic: String) = apply { this.replicaTopic = replicaTopic }
         fun autoCreateTopic(autoCreateTopic: Boolean) = apply { this.autoCreateTopic = autoCreateTopic }
         fun epoch(epoch: Int) = apply { this.epoch = epoch }
         fun groupId(groupId: String) = apply { this.groupId = groupId }
@@ -387,6 +391,21 @@ class KafkaCluster(
 
         override fun openReadOnlySourceLog(clusters: Map<LogClusterAlias, Cluster>) =
             ReadOnlyLog(openSourceLog(clusters))
+
+        override fun openReplicaLog(clusters: Map<LogClusterAlias, Cluster>): Log<ReplicaMessage> {
+            val clusterAlias = this.replicaCluster
+            val cluster = requireNotNull(clusters[clusterAlias] as? KafkaCluster) {
+                "missing Kafka cluster: '$clusterAlias'"
+            }
+
+            val configMap = cluster.kafkaConfigMap
+
+            AdminClient.create(configMap).use { admin ->
+                admin.ensureTopicExists(replicaTopic, autoCreateTopic)
+            }
+
+            return cluster.KafkaLog(ReplicaMessage.Codec, clusterAlias, replicaTopic, epoch, groupId)
+        }
 
         override fun writeTo(dbConfig: DatabaseConfig.Builder) {
             dbConfig.setOtherLog(ProtoAny.pack(kafkaLogConfig {

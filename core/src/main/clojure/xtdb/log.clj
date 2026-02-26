@@ -174,8 +174,8 @@
 (defmethod ig/expand-key :xtdb/source-log [k _]
   {k (ig/ref :xtdb/log)})
 
-(defmethod ig/expand-key :xtdb/replica-log [k _]
-  {k (ig/ref :xtdb/log)})
+(defmethod ig/expand-key :xtdb/replica-log [k {:keys [base factory mode]}]
+  {k {:base base :factory factory :mode mode}})
 
 (def out-of-sync-log-message
   "Node failed to start due to an invalid transaction log state (%s) that does not correspond with the latest indexed transaction (epoch=%s and offset=%s).
@@ -218,7 +218,12 @@
 
 (defmethod ig/init-key :xtdb/source-log [_ log] log)
 
-(defmethod ig/init-key :xtdb/replica-log [_ log] log)
+(defmethod ig/init-key :xtdb/replica-log [_ {:keys [^Log$Factory factory]
+                                              {:keys [log-clusters]} :base}]
+  (.openReplicaLog factory log-clusters))
+
+(defmethod ig/halt-key! :xtdb/replica-log [_ ^Log log]
+  (util/close log))
 
 (defn- ->TxOps [tx-ops]
   (->> tx-ops
