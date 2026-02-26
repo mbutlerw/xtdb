@@ -28,7 +28,7 @@
            (java.time Instant)
            (org.apache.arrow.memory BufferAllocator)
            xtdb.api.TransactionKey
-           (xtdb.api.log SourceMessage$ResolvedTx)
+           (xtdb.api.log ReplicaMessage$ResolvedTx)
            (xtdb.arrow Relation Relation$ILoader RelationAsStructReader RelationReader RowCopier SingletonListReader VectorReader)
            (xtdb.error Anomaly$Caller Interrupted)
            (xtdb.indexer CrashLogger Indexer Indexer$ForDatabase LiveIndex LiveIndex$Tx LiveTable$Tx OpIndexer RelationIndexer Snapshot Snapshot$Source)
@@ -576,12 +576,12 @@
     m))
 
 (defn- ->resolved-tx [^TransactionKey tx-key committed? error table-data]
-  (SourceMessage$ResolvedTx. (.getTxId tx-key)
-                            (time/instant->micros (.getSystemTime tx-key))
-                            committed?
-                            (if error (serde/write-transit error) (byte-array 0))
-                            table-data
-                            nil))
+  (ReplicaMessage$ResolvedTx. (.getTxId tx-key)
+                              (time/instant->micros (.getSystemTime tx-key))
+                              committed?
+                              (if error (serde/write-transit error) (byte-array 0))
+                              table-data
+                              nil))
 
 (defn- commit [tx-key ^LiveIndex$Tx live-idx-tx committed? error]
   (let [table-data (build-table-data live-idx-tx)]

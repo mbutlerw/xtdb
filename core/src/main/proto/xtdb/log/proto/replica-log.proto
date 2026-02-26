@@ -1,0 +1,33 @@
+edition = "2023";
+
+package xtdb.log.proto;
+
+import "xtdb/log/proto/log.proto";
+
+option java_multiple_files = true;
+
+message ReplicaLogMessage {
+    oneof message {
+        ResolvedTx resolved_tx = 1;
+        TriesAdded tries_added = 2;
+        BlockBoundary block_boundary = 3;
+        BlockUploaded block_uploaded = 4;
+    }
+}
+
+message ResolvedTx {
+    int64 tx_id = 1;
+    int64 system_time_micros = 2;
+    bool committed = 3;
+    bytes error = 4;
+    map<string, bytes> table_data = 5;
+
+    oneof db_op {
+        AttachDatabase attach_database = 6;
+        DetachDatabase detach_database = 7;
+    }
+}
+
+message BlockBoundary {
+    int64 block_index = 1;
+}

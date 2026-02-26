@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import xtdb.api.log.InMemoryLog
 import xtdb.api.log.Log
+import xtdb.api.log.ReplicaMessage
 import xtdb.api.log.SourceMessage
 import xtdb.api.log.Watchers
 import xtdb.api.storage.ObjectStore
@@ -39,7 +40,7 @@ class ReplicaLogProcessorTest {
         flushedTxId = flushedTxId
     )
 
-    private fun resolvedTx(txId: Long = 0) = SourceMessage.ResolvedTx(
+    private fun resolvedTx(txId: Long = 0) = ReplicaMessage.ResolvedTx(
         txId = txId,
         systemTimeMicros = Instant.now().toEpochMilli() * 1000,
         committed = true,
@@ -106,10 +107,10 @@ class ReplicaLogProcessorTest {
             // BlockBoundary triggers pendingBlockIdx.
             // Then 3 more records get buffered, exceeding maxBufferedRecords=2.
             val records = listOf(
-                Log.Record(0, now, SourceMessage.BlockBoundary(0)),
-                Log.Record(1, now, SourceMessage.FlushBlock(999)),
-                Log.Record(2, now, SourceMessage.FlushBlock(999)),
-                Log.Record(3, now, SourceMessage.FlushBlock(999)),
+                Log.Record(0, now, ReplicaMessage.BlockBoundary(0)),
+                Log.Record(1, now, ReplicaMessage.TriesAdded(0, 0, emptyList())),
+                Log.Record(2, now, ReplicaMessage.TriesAdded(0, 0, emptyList())),
+                Log.Record(3, now, ReplicaMessage.TriesAdded(0, 0, emptyList())),
             )
 
             assertThrows<Exception> { lp.processRecords(records) }
@@ -162,11 +163,11 @@ class ReplicaLogProcessorTest {
             // During replay: BlockBoundary(1) sets pendingBlockIdx=1, starts buffering again.
             // BlockUploaded(1) now matches → transition block 1.
             val records = listOf(
-                Log.Record(0, now, SourceMessage.BlockBoundary(0)),
+                Log.Record(0, now, ReplicaMessage.BlockBoundary(0)),
                 Log.Record(1, now, resolvedTx(1)),
-                Log.Record(2, now, SourceMessage.BlockBoundary(1)),
-                Log.Record(3, now, SourceMessage.BlockUploaded(1, 0, 0)),
-                Log.Record(4, now, SourceMessage.BlockUploaded(0, 0, 0)),
+                Log.Record(2, now, ReplicaMessage.BlockBoundary(1)),
+                Log.Record(3, now, ReplicaMessage.BlockUploaded(1, 0, 0)),
+                Log.Record(4, now, ReplicaMessage.BlockUploaded(0, 0, 0)),
             )
 
             lp.processRecords(records)

@@ -7,9 +7,10 @@ import org.apache.arrow.memory.BufferAllocator
 import xtdb.api.TransactionAborted
 import xtdb.api.TransactionCommitted
 import xtdb.api.TransactionResult
+import xtdb.api.log.DbOp
 import xtdb.api.log.Log
 import xtdb.api.log.MessageId
-import xtdb.api.log.SourceMessage
+import xtdb.api.log.ReplicaMessage
 import xtdb.api.log.Watchers
 import xtdb.api.storage.Storage
 import xtdb.block.proto.Block
@@ -58,7 +59,7 @@ class ReplicaLogProcessor @JvmOverloads constructor(
     private val maxBufferedRecords: Int = 1024,
     private val dbCatalog: Database.Catalog? = null,
     private val txSource: Indexer.TxSource? = null
-) : LogProcessor, Log.Subscriber<SourceMessage>, AutoCloseable {
+) : LogProcessor, Log.Subscriber<ReplicaMessage>, AutoCloseable {
 
     init {
         require((dbCatalog != null) == (dbState.name == "xtdb")) {
@@ -80,7 +81,7 @@ class ReplicaLogProcessor @JvmOverloads constructor(
     // Read-only block transition: when the live index is full, we buffer messages
     // until BlockUploaded arrives, then transition and replay.
     private var pendingBlockIdx: BlockIndex? = null
-    private val bufferedRecords: MutableList<Log.Record<SourceMessage>> = mutableListOf()
+    private val bufferedRecords: MutableList<Log.Record<ReplicaMessage>> = mutableListOf()
 
     @Volatile
     override var latestProcessedMsgId: MessageId =
@@ -108,7 +109,7 @@ class ReplicaLogProcessor @JvmOverloads constructor(
         allocator.close()
     }
 
-    override fun processRecords(records: List<Log.Record<SourceMessage>>) = runBlocking {
+    override fun processRecords(records: List<Log.Record<ReplicaMessage>>) = runBlocking {
         val queue = ArrayDeque(records)
 
         while (queue.isNotEmpty()) {
@@ -118,7 +119,7 @@ class ReplicaLogProcessor @JvmOverloads constructor(
             try {
                 if (pendingBlockIdx != null) {
                     val msg = record.message
-                    if (msg is SourceMessage.BlockUploaded && msg.blockIndex == pendingBlockIdx && msg.storageEpoch == bufferPool.epoch) {
+                    if (msg is ReplicaMessage.BlockUploaded && msg.blockIndex == pendingBlockIdx && msg.storageEpoch == bufferPool.epoch) {
                         doBlockTransition()
 
                         // Splice buffered records to the front of the queue so they're
@@ -140,11 +141,9 @@ class ReplicaLogProcessor @JvmOverloads constructor(
                 val res = processRecord(msgId, record)
 
                 when (record.message) {
-                    is SourceMessage.ResolvedTx, is SourceMessage.BlockUploaded, is SourceMessage.TriesAdded ->
+                    is ReplicaMessage.ResolvedTx, is ReplicaMessage.BlockUploaded, is ReplicaMessage.TriesAdded ->
                         watchers.notify(msgId, res)
-                    // Other messages (Tx, AttachDatabase, DetachDatabase, FlushBlock) don't notify —
-                    // the source resolves them into messages that do.
-                    else -> {}
+                    is ReplicaMessage.BlockBoundary -> {}
                 }
             } catch (e: ClosedByInterruptException) {
                 watchers.notify(msgId, e)
@@ -174,17 +173,17 @@ class ReplicaLogProcessor @JvmOverloads constructor(
         }
     }
 
-    private fun processRecord(msgId: MessageId, record: Log.Record<SourceMessage>): TransactionResult? {
+    private fun processRecord(msgId: MessageId, record: Log.Record<ReplicaMessage>): TransactionResult? {
         LOG.debug("Processing message $msgId, ${record.message.javaClass.simpleName}")
 
         return when (val msg = record.message) {
-                is SourceMessage.BlockBoundary -> {
+                is ReplicaMessage.BlockBoundary -> {
                     pendingBlockIdx = msg.blockIndex
                     LOG.debug("waiting for block 'b${pendingBlockIdx!!.asLexHex}' via BlockUploaded message...")
                     null
                 }
 
-                is SourceMessage.TriesAdded -> {
+                is ReplicaMessage.TriesAdded -> {
                     // Source writes TriesAdded to the source log. When the replica
                     // refreshes from storage it calls trieCatalog.refresh() directly,
                     // so we only need this for read-only nodes that haven't refreshed yet.
@@ -195,7 +194,7 @@ class ReplicaLogProcessor @JvmOverloads constructor(
                     null
                 }
 
-                is SourceMessage.ResolvedTx -> {
+                is ReplicaMessage.ResolvedTx -> {
                     liveIndex.importTx(msg)
 
                     txSource?.onCommit(msg)
@@ -205,11 +204,11 @@ class ReplicaLogProcessor @JvmOverloads constructor(
                     if (msg.committed) {
                         // Handle attach/detach catalog side-effects encoded in the ResolvedTx
                         when (val dbOp = msg.dbOp) {
-                            is SourceMessage.DbOp.Attach -> {
+                            is DbOp.Attach -> {
                                 secondaryDatabases[dbOp.dbName] = dbOp.config.serializedConfig
                                 dbCatalog!!.attach(dbOp.dbName, dbOp.config)
                             }
-                            is SourceMessage.DbOp.Detach -> {
+                            is DbOp.Detach -> {
                                 secondaryDatabases.remove(dbOp.dbName)
                                 dbCatalog!!.detach(dbOp.dbName)
                             }
@@ -225,10 +224,8 @@ class ReplicaLogProcessor @JvmOverloads constructor(
                     }
                 }
 
-                is SourceMessage.Tx, is SourceMessage.AttachDatabase, is SourceMessage.DetachDatabase, is SourceMessage.FlushBlock -> null
-
                 // Block transitions are handled by the pending-block gate in processRecords.
-                is SourceMessage.BlockUploaded -> null
+                is ReplicaMessage.BlockUploaded -> null
             }.also {
                 latestProcessedMsgId = msgId
                 LOG.debug("Processed message $msgId")

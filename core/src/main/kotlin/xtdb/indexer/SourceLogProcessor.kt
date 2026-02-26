@@ -2,7 +2,9 @@ package xtdb.indexer
 
 import org.apache.arrow.memory.BufferAllocator
 import xtdb.api.TransactionKey
+import xtdb.api.log.DbOp
 import xtdb.api.log.Log
+import xtdb.api.log.ReplicaMessage
 import xtdb.api.log.SourceMessage
 import xtdb.api.log.MessageId
 import xtdb.api.storage.Storage
@@ -34,7 +36,7 @@ import java.time.ZonedDateTime
 private val LOG = SourceLogProcessor::class.logger
 
 /**
- * Subscribes to the source log and resolves SourceMessage.Tx records into SourceMessage.ResolvedTx,
+ * Subscribes to the source log and resolves SourceMessage.Tx records into ReplicaMessage.ResolvedTx,
  * then forwards the amended records to the replica processor via processRecords.
  * All other message types pass through unchanged.
  *
@@ -104,7 +106,7 @@ class SourceLogProcessor(
 
     private val flusher = Flusher(flushTimeout, blockCatalog)
 
-    private fun resolveTx(msgId: MessageId, record: Log.Record<SourceMessage>, msg: SourceMessage.Tx): SourceMessage.ResolvedTx {
+    private fun resolveTx(msgId: MessageId, record: Log.Record<SourceMessage>, msg: SourceMessage.Tx): ReplicaMessage.ResolvedTx {
         return if (skipTxs.isNotEmpty() && skipTxs.contains(msgId)) {
             LOG.warn("Skipping transaction id $msgId - within XTDB_SKIP_TXS")
 
@@ -139,7 +141,7 @@ class SourceLogProcessor(
         }
     }
 
-    private fun finishBlock(systemTime: Instant): Log.Record<SourceMessage> {
+    private fun finishBlock(systemTime: Instant): Log.Record<ReplicaMessage> {
         val blockIdx = (blockCatalog.currentBlockIndex ?: -1) + 1
         LOG.debug("finishing block: 'b${blockIdx.asLexHex}'...")
 
@@ -189,7 +191,7 @@ class SourceLogProcessor(
         liveIndex.nextBlock()
         LOG.debug("finished block: 'b${blockIdx.asLexHex}'.")
 
-        return Log.Record(-1, systemTime, SourceMessage.BlockBoundary(blockIdx))
+        return Log.Record(-1, systemTime, ReplicaMessage.BlockBoundary(blockIdx))
     }
 
     override fun processRecords(records: List<Log.Record<SourceMessage>>) {
@@ -226,7 +228,7 @@ class SourceLogProcessor(
                                 finishBlock(record.logTimestamp)
                             else null
 
-                        listOfNotNull(record, blockBoundary)
+                        listOfNotNull(blockBoundary)
                     }
 
                     is SourceMessage.AttachDatabase -> {
@@ -237,7 +239,7 @@ class SourceLogProcessor(
                             null
                         } catch (e: Anomaly.Caller) { e }
 
-                        val dbOp = if (error == null) SourceMessage.DbOp.Attach(msg.dbName, msg.config) else null
+                        val dbOp = if (error == null) DbOp.Attach(msg.dbName, msg.config) else null
                         val resolvedTx = indexer.addTxRow(TransactionKey(msgId, record.logTimestamp), error)
                             .copy(dbOp = dbOp)
                         listOf(Log.Record(record.logOffset, record.logTimestamp, resolvedTx))
@@ -257,7 +259,7 @@ class SourceLogProcessor(
                             }
                         } catch (e: Anomaly.Caller) { e }
 
-                        val dbOp = if (error == null) SourceMessage.DbOp.Detach(msg.dbName) else null
+                        val dbOp = if (error == null) DbOp.Detach(msg.dbName) else null
                         val resolvedTx = indexer.addTxRow(TransactionKey(msgId, record.logTimestamp), error)
                             .copy(dbOp = dbOp)
                         listOf(Log.Record(record.logOffset, record.logTimestamp, resolvedTx))
@@ -271,10 +273,17 @@ class SourceLogProcessor(
                             msg.tries.groupBy { it.tableName }.forEach { (tableName, tries) ->
                                 trieCatalog.addTries(TableRef.parse(dbState.name, tableName), tries, record.logTimestamp)
                             }
-                        listOf(record)
+
+                        // Convert source TriesAdded → replica TriesAdded for forwarding
+                        listOf(Log.Record(record.logOffset, record.logTimestamp,
+                            ReplicaMessage.TriesAdded(msg.storageVersion, msg.storageEpoch, msg.tries)))
                     }
 
-                    is SourceMessage.BlockUploaded, is SourceMessage.ResolvedTx, is SourceMessage.BlockBoundary -> listOf(record)
+                    is SourceMessage.BlockUploaded -> {
+                        // Round-trips through the source log; convert to replica message
+                        listOf(Log.Record(record.logOffset, record.logTimestamp,
+                            ReplicaMessage.BlockUploaded(msg.blockIndex, msg.latestProcessedMsgId, msg.storageEpoch)))
+                    }
                 }
             }
         } catch (e: Throwable) {

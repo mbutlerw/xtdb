@@ -15,9 +15,13 @@ message SourceLogMessage {
         AttachDatabase attach_database = 3;
         DetachDatabase detach_database = 4;
         BlockUploaded block_uploaded = 5;
-        ResolvedTx resolved_tx = 6;
-        BlockBoundary block_boundary = 7;
     }
+}
+
+message BlockUploaded {
+    int64 block_index = 1;
+    int64 latest_processed_msg_id = 2;
+    int32 storage_epoch = 3;
 }
 
 message FlushBlock {
@@ -69,25 +73,3 @@ message DetachDatabase {
     string db_name = 1;
 }
 
-message ResolvedTx {
-    int64 tx_id = 1;
-    int64 system_time_micros = 2;
-    bool committed = 3;
-    bytes error = 4;
-    map<string, bytes> table_data = 5;
-
-    oneof db_op {
-        AttachDatabase attach_database = 6;
-        DetachDatabase detach_database = 7;
-    }
-}
-
-message BlockBoundary {
-    int64 block_index = 1;
-}
-
-message BlockUploaded {
-    int64 block_index = 1;
-    int64 latest_processed_msg_id = 2;
-    int32 storage_epoch = 3;
-}

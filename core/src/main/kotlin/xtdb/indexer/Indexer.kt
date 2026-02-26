@@ -2,7 +2,7 @@ package xtdb.indexer
 
 import org.apache.arrow.memory.BufferAllocator
 import xtdb.api.TransactionKey
-import xtdb.api.log.SourceMessage
+import xtdb.api.log.ReplicaMessage
 import xtdb.api.log.MessageId
 import xtdb.arrow.VectorReader
 import xtdb.database.DatabaseName
@@ -18,13 +18,13 @@ interface Indexer : AutoCloseable {
         fun indexTx(
             msgId: MessageId, msgTimestamp: Instant, txOps: VectorReader?,
             systemTime: Instant?, defaultTz: ZoneId?, user: String?, userMetadata: Any?
-        ): SourceMessage.ResolvedTx
+        ): ReplicaMessage.ResolvedTx
 
-        fun addTxRow(txKey: TransactionKey, error: Throwable?): SourceMessage.ResolvedTx
+        fun addTxRow(txKey: TransactionKey, error: Throwable?): ReplicaMessage.ResolvedTx
     }
 
     interface TxSource {
-        fun onCommit(resolvedTx: SourceMessage.ResolvedTx)
+        fun onCommit(resolvedTx: ReplicaMessage.ResolvedTx)
     }
 
     companion object {

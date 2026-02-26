@@ -1,17 +1,14 @@
 package xtdb.api.log
 
-import com.google.protobuf.ByteString
 import xtdb.database.Database
 import xtdb.database.DatabaseName
 import xtdb.log.proto.SourceLogMessage
 import xtdb.log.proto.TrieDetails
 import xtdb.log.proto.attachDatabase
-import xtdb.log.proto.blockBoundary
 import xtdb.log.proto.blockUploaded
 import xtdb.log.proto.detachDatabase
 import xtdb.log.proto.flushBlock
 import xtdb.log.proto.sourceLogMessage
-import xtdb.log.proto.resolvedTx
 import xtdb.log.proto.triesAdded
 import xtdb.storage.StorageEpoch
 import xtdb.trie.BlockIndex
@@ -82,24 +79,6 @@ sealed interface SourceMessage {
                                 BlockUploaded(it.blockIndex, it.latestProcessedMsgId, it.storageEpoch)
                             }
 
-                            SourceLogMessage.MessageCase.BLOCK_BOUNDARY -> BlockBoundary(msg.blockBoundary.blockIndex)
-
-                            SourceLogMessage.MessageCase.RESOLVED_TX -> msg.resolvedTx.let {
-                                val dbOp = when (it.dbOpCase) {
-                                    xtdb.log.proto.ResolvedTx.DbOpCase.ATTACH_DATABASE ->
-                                        it.attachDatabase.let { a -> DbOp.Attach(a.dbName, Database.Config.fromProto(a.config)) }
-                                    xtdb.log.proto.ResolvedTx.DbOpCase.DETACH_DATABASE ->
-                                        DbOp.Detach(it.detachDatabase.dbName)
-                                    else -> null
-                                }
-                                ResolvedTx(
-                                    it.txId, it.systemTimeMicros, it.committed,
-                                    it.error.toByteArray(),
-                                    it.tableDataMap.mapValues { (_, v) -> v.toByteArray() },
-                                    dbOp
-                                )
-                            }
-
                             else -> null
                         }
                     }
@@ -147,50 +126,6 @@ sealed interface SourceMessage {
                 this.blockIndex = this@BlockUploaded.blockIndex
                 this.latestProcessedMsgId = this@BlockUploaded.latestProcessedMsgId
                 this.storageEpoch = this@BlockUploaded.storageEpoch
-            }
-        }
-    }
-
-    data class BlockBoundary(val blockIndex: BlockIndex) : ProtobufMessage() {
-        override fun toLogMessage() = sourceLogMessage {
-            blockBoundary = blockBoundary { this.blockIndex = this@BlockBoundary.blockIndex }
-        }
-    }
-
-    sealed interface DbOp {
-        data class Attach(val dbName: DatabaseName, val config: Database.Config) : DbOp
-        data class Detach(val dbName: DatabaseName) : DbOp
-    }
-
-    data class ResolvedTx(
-        val txId: MessageId,
-        val systemTimeMicros: Long,
-        val committed: Boolean,
-        val error: ByteArray,
-        val tableData: Map<String, ByteArray>,
-        val dbOp: DbOp? = null
-    ) : ProtobufMessage() {
-        override fun toLogMessage() = sourceLogMessage {
-            resolvedTx = resolvedTx {
-                this.txId = this@ResolvedTx.txId
-                this.systemTimeMicros = this@ResolvedTx.systemTimeMicros
-                this.committed = this@ResolvedTx.committed
-                this.error = ByteString.copyFrom(this@ResolvedTx.error)
-                this@ResolvedTx.tableData.forEach { (k, v) ->
-                    this.tableData[k] = ByteString.copyFrom(v)
-                }
-                when (val op = this@ResolvedTx.dbOp) {
-                    is DbOp.Attach -> attachDatabase = attachDatabase {
-                        this.dbName = op.dbName
-                        this.config = op.config.serializedConfig
-                    }
-
-                    is DbOp.Detach -> detachDatabase = detachDatabase {
-                        this.dbName = op.dbName
-                    }
-
-                    null -> {}
-                }
             }
         }
     }
