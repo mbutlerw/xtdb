@@ -28,7 +28,7 @@
            (java.time Instant)
            (org.apache.arrow.memory BufferAllocator)
            xtdb.api.TransactionKey
-           (xtdb.api.log Log$Message$ResolvedTx)
+           (xtdb.api.log SourceMessage$ResolvedTx)
            (xtdb.arrow Relation Relation$ILoader RelationAsStructReader RelationReader RowCopier SingletonListReader VectorReader)
            (xtdb.error Anomaly$Caller Interrupted)
            (xtdb.indexer CrashLogger Indexer Indexer$ForDatabase LiveIndex LiveIndex$Tx LiveTable$Tx OpIndexer RelationIndexer Snapshot Snapshot$Source)
@@ -576,7 +576,7 @@
     m))
 
 (defn- ->resolved-tx [^TransactionKey tx-key committed? error table-data]
-  (Log$Message$ResolvedTx. (.getTxId tx-key)
+  (SourceMessage$ResolvedTx. (.getTxId tx-key)
                             (time/instant->micros (.getSystemTime tx-key))
                             committed?
                             (if error (serde/write-transit error) (byte-array 0))

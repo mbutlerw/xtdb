@@ -22,7 +22,8 @@ import xtdb.SimulationTestUtils.Companion.createTrieCatalog
 import xtdb.SimulationTestUtils.Companion.prefix
 import xtdb.SimulationTestUtils.Companion.setLogLevel
 import xtdb.WithSeed
-import xtdb.api.log.Log.Message.TriesAdded
+import xtdb.api.log.Log
+import xtdb.api.log.SourceMessage.TriesAdded
 import xtdb.api.log.Watchers
 import xtdb.api.storage.Storage
 import xtdb.compactor.Compactor.Driver
@@ -41,7 +42,6 @@ import xtdb.table.TableRef
 import xtdb.time.InstantUtil.asMicros
 import xtdb.trie.Trie
 import xtdb.trie.TrieCatalog
-import xtdb.trie.TrieKey
 import xtdb.util.logger
 import xtdb.util.safeMap
 import xtdb.util.useAll

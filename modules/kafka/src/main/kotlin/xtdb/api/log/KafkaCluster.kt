@@ -370,7 +370,7 @@ class KafkaCluster(
         fun epoch(epoch: Int) = apply { this.epoch = epoch }
         fun groupId(groupId: String) = apply { this.groupId = groupId }
 
-        override fun openLog(clusters: Map<LogClusterAlias, Cluster>): Log<Message> {
+        override fun openSourceLog(clusters: Map<LogClusterAlias, Cluster>): Log<SourceMessage> {
             val clusterAlias = this.cluster
             val cluster = requireNotNull(clusters[clusterAlias] as? KafkaCluster) {
                 "missing Kafka cluster: '$clusterAlias'"
@@ -382,11 +382,11 @@ class KafkaCluster(
                 admin.ensureTopicExists(topic, autoCreateTopic)
             }
 
-            return cluster.KafkaLog(Message.Codec, clusterAlias, topic, epoch, groupId)
+            return cluster.KafkaLog(SourceMessage.Codec, clusterAlias, topic, epoch, groupId)
         }
 
-        override fun openReadOnlyLog(clusters: Map<LogClusterAlias, Cluster>) =
-            ReadOnlyLog(openLog(clusters))
+        override fun openReadOnlySourceLog(clusters: Map<LogClusterAlias, Cluster>) =
+            ReadOnlyLog(openSourceLog(clusters))
 
         override fun writeTo(dbConfig: DatabaseConfig.Builder) {
             dbConfig.setOtherLog(ProtoAny.pack(kafkaLogConfig {

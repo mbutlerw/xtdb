@@ -3,7 +3,7 @@ package xtdb.indexer
 import org.apache.arrow.memory.BufferAllocator
 import xtdb.api.TransactionKey
 import xtdb.api.log.Log
-import xtdb.api.log.Log.Message
+import xtdb.api.log.SourceMessage
 import xtdb.api.log.MessageId
 import xtdb.api.storage.Storage
 import xtdb.arrow.Relation
@@ -34,7 +34,7 @@ import java.time.ZonedDateTime
 private val LOG = SourceLogProcessor::class.logger
 
 /**
- * Subscribes to the source log and resolves Message.Tx records into Message.ResolvedTx,
+ * Subscribes to the source log and resolves SourceMessage.Tx records into SourceMessage.ResolvedTx,
  * then forwards the amended records to the replica processor via processRecords.
  * All other message types pass through unchanged.
  *
@@ -51,7 +51,7 @@ class SourceLogProcessor(
     private val skipTxs: Set<MessageId>,
     private val readOnly: Boolean = false,
     flushTimeout: Duration = Duration.ofMinutes(5),
-) : Log.Subscriber<Log.Message> {
+) : Log.Subscriber<SourceMessage> {
 
     private val log = dbStorage.sourceLog
     private val epoch = log.epoch
@@ -104,7 +104,7 @@ class SourceLogProcessor(
 
     private val flusher = Flusher(flushTimeout, blockCatalog)
 
-    private fun resolveTx(msgId: MessageId, record: Log.Record<Message>, msg: Message.Tx): Message.ResolvedTx {
+    private fun resolveTx(msgId: MessageId, record: Log.Record<SourceMessage>, msg: SourceMessage.Tx): SourceMessage.ResolvedTx {
         return if (skipTxs.isNotEmpty() && skipTxs.contains(msgId)) {
             LOG.warn("Skipping transaction id $msgId - within XTDB_SKIP_TXS")
 
@@ -139,7 +139,7 @@ class SourceLogProcessor(
         }
     }
 
-    private fun finishBlock(systemTime: Instant): Log.Record<Log.Message> {
+    private fun finishBlock(systemTime: Instant): Log.Record<SourceMessage> {
         val blockIdx = (blockCatalog.currentBlockIndex ?: -1) + 1
         LOG.debug("finishing block: 'b${blockIdx.asLexHex}'...")
 
@@ -155,7 +155,7 @@ class SourceLogProcessor(
                     .build()
             }
             log.appendMessage(
-                Message.TriesAdded(Storage.VERSION, bufferPool.epoch, addedTries)
+                SourceMessage.TriesAdded(Storage.VERSION, bufferPool.epoch, addedTries)
             )
 
             finishedBlocks.forEach { (table, _) ->
@@ -183,18 +183,18 @@ class SourceLogProcessor(
             bufferPool.putObject(BlockCatalog.blockFilePath(blockIdx), ByteBuffer.wrap(block.toByteArray()))
             blockCatalog.refresh(block)
 
-            log.appendMessage(Message.BlockUploaded(blockIdx, latestProcessedMsgId, bufferPool.epoch))
+            log.appendMessage(SourceMessage.BlockUploaded(blockIdx, latestProcessedMsgId, bufferPool.epoch))
         }
 
         liveIndex.nextBlock()
         LOG.debug("finished block: 'b${blockIdx.asLexHex}'.")
 
-        return Log.Record(-1, systemTime, Message.BlockBoundary(blockIdx))
+        return Log.Record(-1, systemTime, SourceMessage.BlockBoundary(blockIdx))
     }
 
-    override fun processRecords(records: List<Log.Record<Log.Message>>) {
+    override fun processRecords(records: List<Log.Record<SourceMessage>>) {
         if (!readOnly && flusher.checkBlockTimeout(blockCatalog, liveIndex)) {
-            val flushMessage = Message.FlushBlock(blockCatalog.currentBlockIndex ?: -1)
+            val flushMessage = SourceMessage.FlushBlock(blockCatalog.currentBlockIndex ?: -1)
             val offset = log.appendMessage(flushMessage).get().logOffset
             flusher.flushedTxId = offsetToMsgId(epoch, offset)
         }
@@ -208,7 +208,7 @@ class SourceLogProcessor(
                 latestProcessedMsgId = msgId
 
                 when (val msg = record.message) {
-                    is Message.Tx -> {
+                    is SourceMessage.Tx -> {
                         val resolvedTx = resolveTx(msgId, record, msg)
 
                         val blockBoundary = if (liveIndex.isFull()) finishBlock(record.logTimestamp) else null
@@ -219,7 +219,7 @@ class SourceLogProcessor(
                         )
                     }
 
-                    is Message.FlushBlock -> {
+                    is SourceMessage.FlushBlock -> {
                         val expectedBlockIdx = msg.expectedBlockIdx
                         val blockBoundary =
                             if (expectedBlockIdx != null && expectedBlockIdx == (blockCatalog.currentBlockIndex ?: -1L))
@@ -229,7 +229,7 @@ class SourceLogProcessor(
                         listOfNotNull(record, blockBoundary)
                     }
 
-                    is Message.AttachDatabase -> {
+                    is SourceMessage.AttachDatabase -> {
                         val error = try {
                             if (msg.dbName == "xtdb" || msg.dbName in secondaryDatabases)
                                 throw Conflict("Database already exists", "xtdb/db-exists", mapOf("db-name" to msg.dbName))
@@ -237,13 +237,13 @@ class SourceLogProcessor(
                             null
                         } catch (e: Anomaly.Caller) { e }
 
-                        val dbOp = if (error == null) Message.DbOp.Attach(msg.dbName, msg.config) else null
+                        val dbOp = if (error == null) SourceMessage.DbOp.Attach(msg.dbName, msg.config) else null
                         val resolvedTx = indexer.addTxRow(TransactionKey(msgId, record.logTimestamp), error)
                             .copy(dbOp = dbOp)
                         listOf(Log.Record(record.logOffset, record.logTimestamp, resolvedTx))
                     }
 
-                    is Message.DetachDatabase -> {
+                    is SourceMessage.DetachDatabase -> {
                         val error = try {
                             when {
                                 msg.dbName == "xtdb" ->
@@ -257,13 +257,13 @@ class SourceLogProcessor(
                             }
                         } catch (e: Anomaly.Caller) { e }
 
-                        val dbOp = if (error == null) Message.DbOp.Detach(msg.dbName) else null
+                        val dbOp = if (error == null) SourceMessage.DbOp.Detach(msg.dbName) else null
                         val resolvedTx = indexer.addTxRow(TransactionKey(msgId, record.logTimestamp), error)
                             .copy(dbOp = dbOp)
                         listOf(Log.Record(record.logOffset, record.logTimestamp, resolvedTx))
                     }
 
-                    is Message.TriesAdded -> {
+                    is SourceMessage.TriesAdded -> {
                         // Compactor appends TriesAdded to the source log.
                         // We need to update the source's trie catalog so that
                         // finishBlock writes correct partition info to block files.
@@ -274,7 +274,7 @@ class SourceLogProcessor(
                         listOf(record)
                     }
 
-                    is Message.BlockUploaded, is Message.ResolvedTx, is Message.BlockBoundary -> listOf(record)
+                    is SourceMessage.BlockUploaded, is SourceMessage.ResolvedTx, is SourceMessage.BlockBoundary -> listOf(record)
                 }
             }
         } catch (e: Throwable) {

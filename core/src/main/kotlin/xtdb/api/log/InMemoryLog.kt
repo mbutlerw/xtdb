@@ -10,8 +10,6 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.Transient
 import xtdb.api.log.Log.*
 import xtdb.database.proto.DatabaseConfig
-import xtdb.database.proto.DatabaseConfigKt
-import xtdb.database.proto.databaseConfig
 import xtdb.database.proto.inMemoryLog
 import java.time.Instant
 import java.time.InstantSource
@@ -39,11 +37,11 @@ class InMemoryLog<M> @JvmOverloads constructor(
         fun epoch(epoch: Int) = apply { this.epoch = epoch }
         fun coroutineContext(coroutineContext: CoroutineContext) = apply { this.coroutineContext = coroutineContext }
 
-        override fun openLog(clusters: Map<LogClusterAlias, Cluster>) =
-            InMemoryLog<Message>(instantSource, epoch, coroutineContext)
+        override fun openSourceLog(clusters: Map<LogClusterAlias, Cluster>) =
+            InMemoryLog<SourceMessage>(instantSource, epoch, coroutineContext)
 
-        override fun openReadOnlyLog(clusters: Map<LogClusterAlias, Cluster>) =
-            ReadOnlyLog(openLog(clusters))
+        override fun openReadOnlySourceLog(clusters: Map<LogClusterAlias, Cluster>) =
+            ReadOnlyLog(openSourceLog(clusters))
 
         override fun writeTo(dbConfig: DatabaseConfig.Builder) {
             dbConfig.inMemoryLog = inMemoryLog {  }
@@ -61,7 +59,7 @@ class InMemoryLog<M> @JvmOverloads constructor(
         .map { (message, onCommit) ->
             // we only use the instantSource for Tx messages so that the tests
             // that check files can be deterministic
-            val ts = if (message is Message.Tx) instantSource.instant() else Instant.now()
+            val ts = if (message is SourceMessage.Tx) instantSource.instant() else Instant.now()
 
             val record = Record(++latestSubmittedOffset, ts.truncatedTo(MICROS), message)
             onCommit.complete(MessageMetadata(record.logOffset,ts.truncatedTo(MICROS)))

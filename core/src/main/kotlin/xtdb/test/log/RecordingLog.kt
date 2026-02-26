@@ -5,6 +5,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.Transient
 import xtdb.api.log.Log
 import xtdb.api.log.LogClusterAlias
+import xtdb.api.log.SourceMessage
 import xtdb.api.log.LogOffset
 import xtdb.api.log.ReadOnlyLog
 import xtdb.database.proto.DatabaseConfig
@@ -22,14 +23,14 @@ class RecordingLog<M>(private val instantSource: InstantSource, messages: List<M
     data class Factory(
         @Transient var instantSource: InstantSource = InstantSource.system()
     ) : Log.Factory {
-        var messages: List<Log.Message> = emptyList()
+        var messages: List<SourceMessage> = emptyList()
         fun instantSource(instantSource: InstantSource) = apply { this.instantSource = instantSource }
-        fun messages(messages: List<Log.Message>) = apply { this.messages = messages }
+        fun messages(messages: List<SourceMessage>) = apply { this.messages = messages }
 
-        override fun openLog(clusters: Map<LogClusterAlias, Log.Cluster>) = RecordingLog(instantSource, messages)
+        override fun openSourceLog(clusters: Map<LogClusterAlias, Log.Cluster>) = RecordingLog(instantSource, messages)
 
-        override fun openReadOnlyLog(clusters: Map<LogClusterAlias, Log.Cluster>) =
-            ReadOnlyLog(openLog(clusters))
+        override fun openReadOnlySourceLog(clusters: Map<LogClusterAlias, Log.Cluster>) =
+            ReadOnlyLog(openSourceLog(clusters))
 
         override fun writeTo(dbConfig: DatabaseConfig.Builder) = Unit
     }
@@ -41,7 +42,7 @@ class RecordingLog<M>(private val instantSource: InstantSource, messages: List<M
     override fun appendMessage(message: M): CompletableFuture<Log.MessageMetadata> {
         messages.add(message)
 
-        val ts = if (message is Log.Message.Tx) instantSource.instant() else Instant.now()
+        val ts = if (message is SourceMessage.Tx) instantSource.instant() else Instant.now()
 
         return CompletableFuture.completedFuture(
             Log.MessageMetadata(

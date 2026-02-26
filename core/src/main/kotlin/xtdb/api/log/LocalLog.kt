@@ -21,7 +21,6 @@ import xtdb.database.proto.localLog
 import xtdb.time.InstantUtil.asMicros
 import xtdb.time.InstantUtil.fromMicros
 import java.io.DataInputStream
-import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.channels.Channels
 import java.nio.channels.ClosedByInterruptException
@@ -130,7 +129,7 @@ class LocalLog<M>(
                 val (msg) = msgs[idx]
                 // we only use the instantSource for Tx messages so that the tests
                 // that check files can be deterministic
-                val ts = if (msg is Message.Tx || useInstantSourceForNonTx) instantSource.instant() else Instant.now()
+                val ts = if (msg is SourceMessage.Tx || useInstantSourceForNonTx) instantSource.instant() else Instant.now()
                 val payload = codec.encode(msg)
                 val size = payload.size
                 val offset = logFileChannel.position()
@@ -357,11 +356,11 @@ class LocalLog<M>(
         fun useInstantSourceForNonTx() = apply { this.useInstantSourceForNonTx = true }
         fun coroutineContext(coroutineContext: CoroutineContext) = apply { this.coroutineContext = coroutineContext }
 
-        override fun openLog(clusters: Map<LogClusterAlias, Cluster>) =
-            LocalLog(path, Message.Codec, instantSource, epoch, useInstantSourceForNonTx, coroutineContext)
+        override fun openSourceLog(clusters: Map<LogClusterAlias, Cluster>) =
+            LocalLog(path, SourceMessage.Codec, instantSource, epoch, useInstantSourceForNonTx, coroutineContext)
 
-        override fun openReadOnlyLog(clusters: Map<LogClusterAlias, Cluster>) =
-            ReadOnlyLocalLog(path, Message.Codec, epoch, coroutineContext)
+        override fun openReadOnlySourceLog(clusters: Map<LogClusterAlias, Cluster>) =
+            ReadOnlyLocalLog(path, SourceMessage.Codec, epoch, coroutineContext)
 
         override fun writeTo(dbConfig: DatabaseConfig.Builder) {
             dbConfig.localLog = localLog {

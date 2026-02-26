@@ -8,7 +8,7 @@ option java_multiple_files = true;
 
 // Behavioural spec: dev/doc/db.allium
 
-message LogMessage {
+message SourceLogMessage {
     oneof message {
         FlushBlock flush_block = 1;
         TriesAdded tries_added = 2;

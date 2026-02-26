@@ -14,10 +14,9 @@ import org.apache.arrow.memory.BufferAllocator
 import xtdb.api.TransactionResult
 import xtdb.api.YAML_SERDE
 import xtdb.api.log.Log
-import xtdb.api.log.Log.Message
+import xtdb.api.log.SourceMessage
 import xtdb.api.log.MessageId
 import xtdb.api.log.Watchers
-import xtdb.util.MsgIdUtil.offsetToMsgId
 import xtdb.api.storage.Storage
 import xtdb.api.storage.Storage.applyStorage
 import xtdb.catalog.BlockCatalog
@@ -81,8 +80,8 @@ data class Database(
     val trieCatalog: TrieCatalog get() = queryState.trieCatalog
     val liveIndex: LiveIndex get() = replicaIndexer.liveIndex
 
-    val sourceLog: Log<Log.Message> get() = storage.sourceLog
-    val replicaLog: Log<Log.Message> get() = storage.replicaLog
+    val sourceLog: Log<SourceMessage> get() = storage.sourceLog
+    val replicaLog: Log<SourceMessage> get() = storage.replicaLog
     val bufferPool: BufferPool get() = storage.bufferPool
     val metadataManager: PageMetadata.Factory get() = storage.metadataManager
 
@@ -96,15 +95,15 @@ data class Database(
     override fun hashCode() = Objects.hash(name)
 
     fun sendFlushBlockMessage(): Log.MessageMetadata = runBlocking {
-        sourceLog.appendMessage(Message.FlushBlock(blockCatalog.currentBlockIndex ?: -1)).await()
+        sourceLog.appendMessage(SourceMessage.FlushBlock(blockCatalog.currentBlockIndex ?: -1)).await()
     }
 
     fun sendAttachDbMessage(dbName: DatabaseName, config: Config): Log.MessageMetadata = runBlocking {
-        sourceLog.appendMessage(Message.AttachDatabase(dbName, config)).await()
+        sourceLog.appendMessage(SourceMessage.AttachDatabase(dbName, config)).await()
     }
 
     fun sendDetachDbMessage(dbName: DatabaseName): Log.MessageMetadata = runBlocking {
-        sourceLog.appendMessage(Message.DetachDatabase(dbName)).await()
+        sourceLog.appendMessage(SourceMessage.DetachDatabase(dbName)).await()
     }
 
     @Serializable

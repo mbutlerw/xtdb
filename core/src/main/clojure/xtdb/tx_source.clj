@@ -12,7 +12,7 @@
   (:import (org.apache.arrow.memory BufferAllocator)
            (xtdb TaggedValue)
            (xtdb.api TxSourceConfig Xtdb Xtdb$Config)
-           (xtdb.api.log Log Log$Message Log$Message$Tx)
+           (xtdb.api.log Log SourceMessage SourceMessage$Tx)
            (xtdb.arrow Relation RelationReader)
            (xtdb.catalog BlockCatalog TableCatalog)
            xtdb.database.DatabaseState
@@ -112,7 +112,7 @@
                                         :ops (map #(dissoc % :system-from) events)}))
                                 (into []))}
                   encode-fn
-                  Log$Message$Tx.)}))
+                  SourceMessage$Tx.)}))
 
 (def ^:dynamic *after-block-hook* nil)
 
@@ -187,7 +187,7 @@
                                                     (read-table-rows-from-ipc allocator db-name schema-and-table ipc-bytes)))
                                              (into []))}
                                encode-fn
-                               Log$Message$Tx.)))))))
+                               SourceMessage$Tx.)))))))
 
 (defmethod ig/init-key ::for-db [_ {:keys [^TxSourceConfig tx-source-conf ^Log output-log
                                            ^DatabaseState db-state allocator buffer-pool
@@ -202,7 +202,7 @@
           last-message (try
                          (let [decode-record (->decode-fn (keyword (.getFormat tx-source-conf)))]
                            (->> (.readLastMessage output-log)
-                                Log$Message/.encode
+                                SourceMessage/.encode
                                 decode-record))
                          (catch Exception _ nil))
           refresh! (fn []
@@ -227,7 +227,7 @@
   (when (and tx-source-conf
              (.getEnable tx-source-conf)
              (= db-name (.getDbName tx-source-conf)))
-    (.openLog (.getOutputLog tx-source-conf) log-clusters)))
+    (.openSourceLog (.getOutputLog tx-source-conf) log-clusters)))
 
 (defmethod ig/halt-key! ::output-log [_ output-log]
   (util/close output-log))

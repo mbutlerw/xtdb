@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import xtdb.api.log.InMemoryLog
 import xtdb.api.log.Log
+import xtdb.api.log.SourceMessage
 import xtdb.api.log.Watchers
 import xtdb.api.storage.ObjectStore
 import xtdb.block.proto.block
@@ -38,7 +39,7 @@ class ReplicaLogProcessorTest {
         flushedTxId = flushedTxId
     )
 
-    private fun resolvedTx(txId: Long = 0) = Log.Message.ResolvedTx(
+    private fun resolvedTx(txId: Long = 0) = SourceMessage.ResolvedTx(
         txId = txId,
         systemTimeMicros = Instant.now().toEpochMilli() * 1000,
         committed = true,
@@ -79,7 +80,7 @@ class ReplicaLogProcessorTest {
 
     @Test
     fun `buffer overflow stops ingestion`() {
-        val log = InMemoryLog<Log.Message>(InstantSource.system(), 0)
+        val log = InMemoryLog<SourceMessage>(InstantSource.system(), 0)
         val blockCatalog = BlockCatalog("test", null)
         val liveIndex = mockk<LiveIndex>(relaxed = true)
 
@@ -105,10 +106,10 @@ class ReplicaLogProcessorTest {
             // BlockBoundary triggers pendingBlockIdx.
             // Then 3 more records get buffered, exceeding maxBufferedRecords=2.
             val records = listOf(
-                Log.Record(0, now, Log.Message.BlockBoundary(0)),
-                Log.Record(1, now, Log.Message.FlushBlock(999)),
-                Log.Record(2, now, Log.Message.FlushBlock(999)),
-                Log.Record(3, now, Log.Message.FlushBlock(999)),
+                Log.Record(0, now, SourceMessage.BlockBoundary(0)),
+                Log.Record(1, now, SourceMessage.FlushBlock(999)),
+                Log.Record(2, now, SourceMessage.FlushBlock(999)),
+                Log.Record(3, now, SourceMessage.FlushBlock(999)),
             )
 
             assertThrows<Exception> { lp.processRecords(records) }
@@ -118,7 +119,7 @@ class ReplicaLogProcessorTest {
 
     @Test
     fun `replay handles block transitions during replay`() {
-        val log = InMemoryLog<Log.Message>(InstantSource.system(), 0)
+        val log = InMemoryLog<SourceMessage>(InstantSource.system(), 0)
         val blockCatalog = BlockCatalog("test", null)
         val liveIndex = mockk<LiveIndex>(relaxed = true)
 
@@ -161,11 +162,11 @@ class ReplicaLogProcessorTest {
             // During replay: BlockBoundary(1) sets pendingBlockIdx=1, starts buffering again.
             // BlockUploaded(1) now matches → transition block 1.
             val records = listOf(
-                Log.Record(0, now, Log.Message.BlockBoundary(0)),
+                Log.Record(0, now, SourceMessage.BlockBoundary(0)),
                 Log.Record(1, now, resolvedTx(1)),
-                Log.Record(2, now, Log.Message.BlockBoundary(1)),
-                Log.Record(3, now, Log.Message.BlockUploaded(1, 0, 0)),
-                Log.Record(4, now, Log.Message.BlockUploaded(0, 0, 0)),
+                Log.Record(2, now, SourceMessage.BlockBoundary(1)),
+                Log.Record(3, now, SourceMessage.BlockUploaded(1, 0, 0)),
+                Log.Record(4, now, SourceMessage.BlockUploaded(0, 0, 0)),
             )
 
             lp.processRecords(records)

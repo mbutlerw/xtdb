@@ -145,7 +145,7 @@ entity Message {
 
 variant TxMessage : Message {
     -- Client-submitted transaction operations.
-    -- See: tx/TxWriter.kt, api/log/Log.kt (Log$Message$Tx) — serialised via TxWriter, not proto.
+    -- See: tx/TxWriter.kt, api/log/Log.kt, api/log/SourceMessage.kt (SourceMessage$Tx) — serialised via TxWriter, not proto.
     system_time: Instant?
     default_tz: String?
     user: String?

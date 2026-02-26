@@ -5,11 +5,11 @@ import org.junit.jupiter.api.Test
 
 class InMemoryLogTest {
 
-    private fun txMessage(id: Byte) = Log.Message.Tx(byteArrayOf(-1, id))
+    private fun txMessage(id: Byte) = SourceMessage.Tx(byteArrayOf(-1, id))
 
     @Test
     fun `readLastMessage always returns null`() {
-        val log = InMemoryLog.Factory().openLog(emptyMap())
+        val log = InMemoryLog.Factory().openSourceLog(emptyMap())
         log.use {
             assertNull(log.readLastMessage())
 

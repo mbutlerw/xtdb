@@ -24,7 +24,7 @@
            (xtdb.adbc XtdbConnection XtdbConnection$Node)
            (xtdb.antlr Sql$DirectlyExecutableStatementContext)
            (xtdb.api DataSource TransactionResult Xtdb Xtdb$CompactorNode Xtdb$Config Xtdb$ExecutedTx Xtdb$SubmittedTx Xtdb$XtdbInternal)
-           (xtdb.api.log Log$Message$Tx Log$MessageMetadata)
+           (xtdb.api.log SourceMessage$Tx Log$MessageMetadata)
            xtdb.api.module.XtdbModule$Factory
            (xtdb.database Database Database$Catalog)
            xtdb.error.Anomaly
@@ -169,7 +169,7 @@
             log (.getSourceLog db)
             tx-opts (.withFallbackTz tx-opts default-tz)]
         (util/rethrowing-cause
-         (let [tx-msg (Log$Message$Tx. (TxWriter/serializeTxOps tx-ops allocator tx-opts))
+         (let [tx-msg (SourceMessage$Tx. (TxWriter/serializeTxOps tx-ops allocator tx-opts))
                ^Log$MessageMetadata message-meta @(.appendMessage log tx-msg)]
            (Xtdb$SubmittedTx. (MsgIdUtil/offsetToMsgId (.getEpoch log) (.getLogOffset message-meta))))))
       (catch Anomaly e

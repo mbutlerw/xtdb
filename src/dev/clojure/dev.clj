@@ -23,7 +23,7 @@
            (xtdb.block.proto TableBlock)
            (xtdb.log.proto TrieDetails)
            (xtdb.trie ArrowHashTrie ArrowHashTrie$IidBranch ArrowHashTrie$Leaf ArrowHashTrie$Node)
-           [xtdb.api.log Log$Message]))
+           [xtdb.api.log SourceMessage]))
 
 #_{:clj-kondo/ignore [:unused-namespace :unused-referred-var]}
 (require '[xtdb.logging :refer [set-log-level!]])
@@ -190,7 +190,7 @@
 
 (defn byte-array->txs [^bytes ba]
   (with-open [al (RootAllocator.)
-              r (Relation/openFromArrowStream al (.getPayload (Log$Message/parse ba)))]
+              r (Relation/openFromArrowStream al (.getPayload (SourceMessage/parse ba)))]
     (vec
       (for [op (-> r .getAsMaps first :tx-ops)]
         (let [{:keys [query args]} (.getValue op)]

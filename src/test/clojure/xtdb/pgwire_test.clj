@@ -31,7 +31,7 @@
            (xtdb.pgwire PgType)
            (xtdb JsonSerde JsonLdSerde)
            (xtdb.api DataSource$ConnectionBuilder)
-           xtdb.api.log.Log$Message$FlushBlock
+           xtdb.api.log.SourceMessage$FlushBlock
            xtdb.pgwire.Server))
 
 (set! *warn-on-reflection* false) ; gagh! lazy. don't do this.
@@ -2994,7 +2994,7 @@ ORDER BY 1,2;")
     (xt/execute-tx conn [[:put-docs :foo {:xt/id 1}]])
     (t/is (= [{:xt/id 1}] (xt/q conn "SELECT * FROM foo")))
     (doto (.getSourceLog (db/primary-db tu/*node*))
-      (.appendMessage (Log$Message$FlushBlock. 1)))
+      (.appendMessage (SourceMessage$FlushBlock. 1)))
     (t/is (= [{:xt/id 1}] (xt/q conn "SELECT * FROM foo")))))
 
 (t/deftest test-database-metadata

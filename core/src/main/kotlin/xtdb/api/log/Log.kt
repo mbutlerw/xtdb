@@ -9,17 +9,10 @@ import kotlinx.serialization.modules.polymorphic
 import kotlinx.serialization.modules.subclass
 import xtdb.DurationSerde
 import xtdb.api.PathWithEnvVarSerde
-import xtdb.database.Database
-import xtdb.database.DatabaseName
 import xtdb.database.proto.DatabaseConfig
 import xtdb.database.proto.DatabaseConfig.LogCase.*
-import xtdb.log.proto.*
-import xtdb.log.proto.LogMessage.MessageCase
-import xtdb.storage.StorageEpoch
-import xtdb.trie.BlockIndex
 import xtdb.util.MsgIdUtil
 import xtdb.util.asPath
-import java.nio.ByteBuffer
 import java.nio.file.Path
 import java.time.Instant
 import java.util.*
@@ -54,186 +47,9 @@ interface Log<M> : AutoCloseable {
         }
     }
 
-    sealed interface Message {
-
-        fun encode(): ByteArray
-
-        companion object Codec : MessageCodec<Message> {
-            private const val TX_HEADER: Byte = -1
-            private const val LEGACY_FLUSH_BLOCK_HEADER: Byte = 2
-            private const val PROTOBUF_HEADER: Byte = 3
-
-            override fun encode(message: Message): ByteArray = message.encode()
-
-            override fun decode(bytes: ByteArray): Message? = parse(bytes)
-
-            @JvmStatic
-            fun parse(bytes: ByteArray) =
-                when (bytes[0]) {
-                    TX_HEADER -> Tx(bytes)
-                    LEGACY_FLUSH_BLOCK_HEADER -> null
-                    PROTOBUF_HEADER -> ProtobufMessage.parse(ByteBuffer.wrap(bytes).position(1))
-
-                    else -> throw IllegalArgumentException("Unknown message type: ${bytes[0]}")
-                }
-        }
-
-        class Tx(val payload: ByteArray) : Message {
-            override fun encode(): ByteArray = payload
-        }
-
-        sealed class ProtobufMessage : Message {
-            abstract fun toLogMessage(): LogMessage
-
-            final override fun encode(): ByteArray =
-                toLogMessage().let {
-                    ByteBuffer.allocate(1 + it.serializedSize).apply {
-                        put(PROTOBUF_HEADER)
-                        put(it.toByteArray())
-                        flip()
-                    }.array()
-                }
-
-            companion object {
-                fun parse(buffer: ByteBuffer): ProtobufMessage? =
-                    LogMessage.parseFrom(buffer.duplicate().position(1))
-                        .let { msg ->
-                            when (msg.messageCase) {
-                                MessageCase.FLUSH_BLOCK ->
-                                    msg.flushBlock
-                                        .takeIf { it.hasExpectedBlockIdx() }
-                                        ?.expectedBlockIdx
-                                        ?.let { FlushBlock(it) }
-
-                                MessageCase.TRIES_ADDED -> msg.triesAdded.let {
-                                    TriesAdded(it.storageVersion, it.storageEpoch, it.triesList)
-                                }
-
-                                MessageCase.ATTACH_DATABASE -> msg.attachDatabase.let {
-                                    AttachDatabase(it.dbName, Database.Config.fromProto(it.config))
-                                }
-
-                                MessageCase.DETACH_DATABASE -> DetachDatabase(msg.detachDatabase.dbName)
-
-                                MessageCase.BLOCK_UPLOADED -> msg.blockUploaded.let {
-                                    BlockUploaded(it.blockIndex, it.latestProcessedMsgId, it.storageEpoch)
-                                }
-
-                                MessageCase.BLOCK_BOUNDARY -> BlockBoundary(msg.blockBoundary.blockIndex)
-
-                                MessageCase.RESOLVED_TX -> msg.resolvedTx.let {
-                                    val dbOp = when (it.dbOpCase) {
-                                        xtdb.log.proto.ResolvedTx.DbOpCase.ATTACH_DATABASE ->
-                                            it.attachDatabase.let { a -> DbOp.Attach(a.dbName, Database.Config.fromProto(a.config)) }
-                                        xtdb.log.proto.ResolvedTx.DbOpCase.DETACH_DATABASE ->
-                                            DbOp.Detach(it.detachDatabase.dbName)
-                                        else -> null
-                                    }
-                                    ResolvedTx(
-                                        it.txId, it.systemTimeMicros, it.committed,
-                                        it.error.toByteArray(),
-                                        it.tableDataMap.mapValues { (_, v) -> v.toByteArray() },
-                                        dbOp
-                                    )
-                                }
-
-                                else -> null
-                            }
-                        }
-            }
-        }
-
-        data class FlushBlock(val expectedBlockIdx: BlockIndex?) : ProtobufMessage() {
-            override fun toLogMessage() = logMessage {
-                flushBlock = flushBlock { this@FlushBlock.expectedBlockIdx?.let { expectedBlockIdx = it } }
-            }
-        }
-
-        data class TriesAdded(
-            val storageVersion: Int, val storageEpoch: StorageEpoch, val tries: List<TrieDetails>
-        ) : ProtobufMessage() {
-            override fun toLogMessage() = logMessage {
-                triesAdded = triesAdded {
-                    storageVersion = this@TriesAdded.storageVersion
-                    storageEpoch = this@TriesAdded.storageEpoch
-                    tries.addAll(this@TriesAdded.tries)
-                }
-            }
-        }
-
-        data class AttachDatabase(val dbName: DatabaseName, val config: Database.Config) : ProtobufMessage() {
-            override fun toLogMessage() = logMessage {
-                attachDatabase = attachDatabase {
-                    this.dbName = this@AttachDatabase.dbName
-                    this.config = this@AttachDatabase.config.serializedConfig
-                }
-            }
-        }
-
-        data class DetachDatabase(val dbName: DatabaseName) : ProtobufMessage() {
-            override fun toLogMessage() = logMessage {
-                detachDatabase = detachDatabase {
-                    this.dbName = this@DetachDatabase.dbName
-                }
-            }
-        }
-
-        data class BlockUploaded(val blockIndex: BlockIndex, val latestProcessedMsgId: MessageId, val storageEpoch: StorageEpoch) : ProtobufMessage() {
-            override fun toLogMessage() = logMessage {
-                blockUploaded = blockUploaded {
-                    this.blockIndex = this@BlockUploaded.blockIndex
-                    this.latestProcessedMsgId = this@BlockUploaded.latestProcessedMsgId
-                    this.storageEpoch = this@BlockUploaded.storageEpoch
-                }
-            }
-        }
-
-        data class BlockBoundary(val blockIndex: BlockIndex) : ProtobufMessage() {
-            override fun toLogMessage() = logMessage {
-                blockBoundary = blockBoundary { this.blockIndex = this@BlockBoundary.blockIndex }
-            }
-        }
-
-        sealed interface DbOp {
-            data class Attach(val dbName: DatabaseName, val config: Database.Config) : DbOp
-            data class Detach(val dbName: DatabaseName) : DbOp
-        }
-
-        data class ResolvedTx(
-            val txId: MessageId,
-            val systemTimeMicros: Long,
-            val committed: Boolean,
-            val error: ByteArray,
-            val tableData: Map<String, ByteArray>,
-            val dbOp: DbOp? = null
-        ) : ProtobufMessage() {
-            override fun toLogMessage() = logMessage {
-                resolvedTx = resolvedTx {
-                    this.txId = this@ResolvedTx.txId
-                    this.systemTimeMicros = this@ResolvedTx.systemTimeMicros
-                    this.committed = this@ResolvedTx.committed
-                    this.error = com.google.protobuf.ByteString.copyFrom(this@ResolvedTx.error)
-                    this@ResolvedTx.tableData.forEach { (k, v) ->
-                        this.tableData[k] = com.google.protobuf.ByteString.copyFrom(v)
-                    }
-                    when (val op = this@ResolvedTx.dbOp) {
-                        is DbOp.Attach -> attachDatabase = attachDatabase {
-                            this.dbName = op.dbName
-                            this.config = op.config.serializedConfig
-                        }
-                        is DbOp.Detach -> detachDatabase = detachDatabase {
-                            this.dbName = op.dbName
-                        }
-                        null -> {}
-                    }
-                }
-            }
-        }
-    }
-
     interface Factory {
-        fun openLog(clusters: Map<LogClusterAlias, Cluster>): Log<Message>
-        fun openReadOnlyLog(clusters: Map<LogClusterAlias, Cluster>): Log<Message>
+        fun openSourceLog(clusters: Map<LogClusterAlias, Cluster>): Log<SourceMessage>
+        fun openReadOnlySourceLog(clusters: Map<LogClusterAlias, Cluster>): Log<SourceMessage>
 
         fun writeTo(dbConfig: DatabaseConfig.Builder)
 

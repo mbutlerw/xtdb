@@ -15,7 +15,7 @@
            java.util.concurrent.TimeUnit
            org.apache.arrow.memory.BufferAllocator
            (xtdb.api IndexerConfig TransactionKey Xtdb$Config)
-           (xtdb.api.log Log Log$Cluster$Factory Log$Factory Log$Message$Tx Log$MessageMetadata)
+           (xtdb.api.log Log Log$Cluster$Factory Log$Factory SourceMessage$Tx Log$MessageMetadata)
            (xtdb.arrow Relation Vector)
            xtdb.catalog.BlockCatalog
            (xtdb.database Database DatabaseStorage Database$Catalog Database$Mode)
@@ -205,8 +205,8 @@
 (defmethod ig/init-key :xtdb/log [_ {:keys [buffer-pool, ^Log$Factory factory, ^Database$Mode mode]
                                      {:keys [log-clusters]} :base}]
   (let [log (if (= mode Database$Mode/READ_ONLY)
-              (.openReadOnlyLog factory log-clusters)
-              (.openLog factory log-clusters))
+              (.openReadOnlySourceLog factory log-clusters)
+              (.openSourceLog factory log-clusters))
         latest-completed-tx (some-> (BlockCatalog/getLatestBlock buffer-pool)
                                     (.getLatestCompletedTx)
                                     (block-cat/<-TxKey))]
@@ -236,7 +236,7 @@
         default-tz (:default-tz opts default-tz)]
     (util/rethrowing-cause
       (let [^Log$MessageMetadata message-meta @(.appendMessage log
-                                                               (Log$Message$Tx. (serialize-tx-ops allocator (->TxOps tx-ops)
+                                                               (SourceMessage$Tx. (serialize-tx-ops allocator (->TxOps tx-ops)
                                                                                                   (-> (select-keys opts [:authn :default-db])
                                                                                                       (assoc :default-tz (:default-tz opts default-tz)
                                                                                                              :system-time (some-> system-time time/expect-instant))))))]
