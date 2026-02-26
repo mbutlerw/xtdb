@@ -17,6 +17,7 @@ import xtdb.SimulationTestUtils.Companion.createTrieCatalog
 import xtdb.SimulationTestUtils.Companion.prefix
 import xtdb.SimulationTestUtils.Companion.setLogLevel
 import xtdb.api.TransactionKey
+import xtdb.api.log.Watchers
 import xtdb.catalog.BlockCatalog
 import xtdb.catalog.BlockCatalog.Companion.latestBlock
 import xtdb.compactor.Compactor
@@ -122,7 +123,7 @@ class NodeSimulationTest : SimulationTestBase() {
             val compactor = Compactor.Impl(compactorDriver, null, jobCalculator, false, 2, dispatcher)
             val dbStorage = DatabaseStorage(null, null, sharedBufferPool, null)
             val dbState = DatabaseState("xtdb", blockCatalog, null, trieCatalog)
-            val compactorForDb = compactor.openForDatabase(allocator, dbStorage, dbState)
+            val compactorForDb = compactor.openForDatabase(allocator, dbStorage, dbState, Watchers(-1))
             val garbageCollector = GarbageCollector.Impl(sharedBufferPool, dbState, gcDriver, 2, garbageLifetime, Duration.ofSeconds(30), dispatcher)
             MockDatabase("xtdb", allocator, sharedBufferPool, trieCatalog, blockCatalog, compactor, compactorForDb, garbageCollector)
         }

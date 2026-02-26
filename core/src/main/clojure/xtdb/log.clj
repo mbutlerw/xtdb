@@ -15,7 +15,7 @@
            java.util.concurrent.TimeUnit
            org.apache.arrow.memory.BufferAllocator
            (xtdb.api IndexerConfig TransactionKey Xtdb$Config)
-           (xtdb.api.log Log Log$Cluster$Factory Log$Factory Log$Message$Tx Log$MessageMetadata)
+           (xtdb.api.log Log Log$Cluster$Factory Log$Factory SourceMessage$Tx Log$MessageMetadata)
            (xtdb.arrow Relation Vector)
            xtdb.catalog.BlockCatalog
            (xtdb.database Database DatabaseStorage Database$Catalog Database$Mode)
@@ -174,8 +174,8 @@
 (defmethod ig/expand-key :xtdb/source-log [k _]
   {k (ig/ref :xtdb/log)})
 
-(defmethod ig/expand-key :xtdb/replica-log [k _]
-  {k (ig/ref :xtdb/log)})
+(defmethod ig/expand-key :xtdb/replica-log [k {:keys [base factory mode]}]
+  {k {:base base :factory factory :mode mode}})
 
 (def out-of-sync-log-message
   "Node failed to start due to an invalid transaction log state (%s) that does not correspond with the latest indexed transaction (epoch=%s and offset=%s).
@@ -205,8 +205,8 @@
 (defmethod ig/init-key :xtdb/log [_ {:keys [buffer-pool, ^Log$Factory factory, ^Database$Mode mode]
                                      {:keys [log-clusters]} :base}]
   (let [log (if (= mode Database$Mode/READ_ONLY)
-              (.openReadOnlyLog factory log-clusters)
-              (.openLog factory log-clusters))
+              (.openReadOnlySourceLog factory log-clusters)
+              (.openSourceLog factory log-clusters))
         latest-completed-tx (some-> (BlockCatalog/getLatestBlock buffer-pool)
                                     (.getLatestCompletedTx)
                                     (block-cat/<-TxKey))]
@@ -218,7 +218,12 @@
 
 (defmethod ig/init-key :xtdb/source-log [_ log] log)
 
-(defmethod ig/init-key :xtdb/replica-log [_ log] log)
+(defmethod ig/init-key :xtdb/replica-log [_ {:keys [^Log$Factory factory]
+                                              {:keys [log-clusters]} :base}]
+  (.openReplicaLog factory log-clusters))
+
+(defmethod ig/halt-key! :xtdb/replica-log [_ ^Log log]
+  (util/close log))
 
 (defn- ->TxOps [tx-ops]
   (->> tx-ops
@@ -236,7 +241,7 @@
         default-tz (:default-tz opts default-tz)]
     (util/rethrowing-cause
       (let [^Log$MessageMetadata message-meta @(.appendMessage log
-                                                               (Log$Message$Tx. (serialize-tx-ops allocator (->TxOps tx-ops)
+                                                               (SourceMessage$Tx. (serialize-tx-ops allocator (->TxOps tx-ops)
                                                                                                   (-> (select-keys opts [:authn :default-db])
                                                                                                       (assoc :default-tz (:default-tz opts default-tz)
                                                                                                              :system-time (some-> system-time time/expect-instant))))))]
@@ -248,17 +253,19 @@
             :indexer (ig/ref :xtdb.indexer/for-db)
             :live-index (ig/ref :xtdb.indexer/live-index)
             :compactor (ig/ref :xtdb.compactor/for-db)
+            :watchers (ig/ref :xtdb.indexer.replica-log/watchers)
             :tx-source (ig/ref :xtdb.tx-source/for-db)}
            (assoc (dissoc opts :indexer-conf :tx-source-conf)
                   :skip-txs (.getSkipTxs indexer-conf)
                   :enabled? (.getEnabled indexer-conf)))})
 
 (defmethod ig/init-key :xtdb.log/processor [_ {{:keys [meter-registry]} :base
-                                               :keys [allocator ^DatabaseStorage db-storage db-state indexer live-index compactor skip-txs enabled? db-catalog tx-source]}]
+                                               :keys [allocator ^DatabaseStorage db-storage db-state indexer live-index compactor skip-txs watchers enabled? db-catalog tx-source]}]
   (when enabled?
     (ReplicaLogProcessor. allocator meter-registry
                           db-storage db-state
                           indexer live-index compactor (set skip-txs)
+                          watchers
                           1024
                           db-catalog
                           tx-source)))
@@ -269,13 +276,13 @@
 (defn await-db
   ([db msg-id] (await-db db msg-id nil))
   ([^Database db, ^long msg-id, ^Duration timeout]
-   @(cond-> (.awaitAsync (.getLogProcessor db) msg-id)
+   @(cond-> (.awaitSourceMessageAsync (.getReplicaIndexer db) msg-id)
       timeout (.orTimeout (.toMillis timeout) TimeUnit/MILLISECONDS))))
 
 (defn sync-db
   ([db] (sync-db db nil))
   ([^Database db, ^Duration timeout]
-   (let [msg-id (.getLatestSubmittedMsgId (.getLogProcessor db))]
+   (let [msg-id (.getLatestSubmittedMsgId (.getSourceLog db))]
      (await-db db msg-id timeout))))
 
 (defn await-node

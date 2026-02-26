@@ -17,7 +17,7 @@
            (org.apache.arrow.memory BufferAllocator)
            (java.io ByteArrayInputStream)
            (xtdb.api IndexerConfig TransactionKey)
-           (xtdb.api.log Log$Message$ResolvedTx)
+           (xtdb.api.log ReplicaMessage$ResolvedTx)
            xtdb.storage.BufferPool
            (xtdb.arrow Relation Relation$StreamLoader)
            (xtdb.catalog BlockCatalog TableCatalog)

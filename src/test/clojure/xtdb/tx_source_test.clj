@@ -14,7 +14,7 @@
             [xtdb.log :as xt-log]
             [xtdb.trie-catalog :as trie-cat]
             [xtdb.tx-source :as tx-source])
-  (:import [xtdb.api.log Log$Message]
+  (:import [xtdb.api.log SourceMessage]
            [xtdb.table TableRef]
            [xtdb.test.log RecordingLog]))
 
@@ -25,7 +25,7 @@
 
 (defn decode-record
   ([msg] (decode-record msg :json))
-  ([msg fmt] (-> msg Log$Message/.encode (xtdb.serde/read-transit fmt))))
+  ([msg fmt] (-> msg SourceMessage/.encode (xtdb.serde/read-transit fmt))))
 
 (t/deftest test-tx-source-output
   (with-open [node (xtn/start-node (merge tu/*node-opts*

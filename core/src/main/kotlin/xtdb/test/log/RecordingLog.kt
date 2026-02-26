@@ -5,6 +5,8 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.Transient
 import xtdb.api.log.Log
 import xtdb.api.log.LogClusterAlias
+import xtdb.api.log.SourceMessage
+import xtdb.api.log.ReplicaMessage
 import xtdb.api.log.LogOffset
 import xtdb.api.log.ReadOnlyLog
 import xtdb.database.proto.DatabaseConfig
@@ -13,7 +15,7 @@ import java.time.InstantSource
 import java.time.temporal.ChronoUnit
 import java.util.concurrent.CompletableFuture
 
-class RecordingLog(private val instantSource: InstantSource, messages: List<Log.Message>) : Log {
+class RecordingLog<M>(private val instantSource: InstantSource, messages: List<M>) : Log<M> {
     override val epoch = 0
     val messages = messages.toMutableList()
 
@@ -22,14 +24,17 @@ class RecordingLog(private val instantSource: InstantSource, messages: List<Log.
     data class Factory(
         @Transient var instantSource: InstantSource = InstantSource.system()
     ) : Log.Factory {
-        var messages: List<Log.Message> = emptyList()
+        var messages: List<SourceMessage> = emptyList()
         fun instantSource(instantSource: InstantSource) = apply { this.instantSource = instantSource }
-        fun messages(messages: List<Log.Message>) = apply { this.messages = messages }
+        fun messages(messages: List<SourceMessage>) = apply { this.messages = messages }
 
-        override fun openLog(clusters: Map<LogClusterAlias, Log.Cluster>) = RecordingLog(instantSource, messages)
+        override fun openSourceLog(clusters: Map<LogClusterAlias, Log.Cluster>) = RecordingLog(instantSource, messages)
 
-        override fun openReadOnlyLog(clusters: Map<LogClusterAlias, Log.Cluster>) =
-            ReadOnlyLog(openLog(clusters))
+        override fun openReadOnlySourceLog(clusters: Map<LogClusterAlias, Log.Cluster>) =
+            ReadOnlyLog(openSourceLog(clusters))
+
+        override fun openReplicaLog(clusters: Map<LogClusterAlias, Log.Cluster>) =
+            RecordingLog<ReplicaMessage>(instantSource, emptyList())
 
         override fun writeTo(dbConfig: DatabaseConfig.Builder) = Unit
     }
@@ -38,11 +43,10 @@ class RecordingLog(private val instantSource: InstantSource, messages: List<Log.
     override var latestSubmittedOffset: LogOffset = -1
         private set
 
-    override fun appendMessage(message: Log.Message): CompletableFuture<Log.MessageMetadata> {
+    override fun appendMessage(message: M): CompletableFuture<Log.MessageMetadata> {
         messages.add(message)
 
-        // See comment in InMemoryLog
-        val ts = if (message is Log.Message.Tx) instantSource.instant() else Instant.now()
+        val ts = if (message is SourceMessage.Tx) instantSource.instant() else Instant.now()
 
         return CompletableFuture.completedFuture(
             Log.MessageMetadata(
@@ -52,14 +56,14 @@ class RecordingLog(private val instantSource: InstantSource, messages: List<Log.
         )
     }
 
-    override fun readLastMessage(): Log.Message? = messages.lastOrNull()
+    override fun readLastMessage(): M? = messages.lastOrNull()
 
-    override fun openAtomicProducer(transactionalId: String) = object : Log.AtomicProducer {
-        override fun openTx() = object : Log.AtomicProducer.Tx {
-            private val buffer = mutableListOf<Pair<Log.Message, CompletableFuture<Log.MessageMetadata>>>()
+    override fun openAtomicProducer(transactionalId: String) = object : Log.AtomicProducer<M> {
+        override fun openTx() = object : Log.AtomicProducer.Tx<M> {
+            private val buffer = mutableListOf<Pair<M, CompletableFuture<Log.MessageMetadata>>>()
             private var isOpen = true
 
-            override fun appendMessage(message: Log.Message): CompletableFuture<Log.MessageMetadata> {
+            override fun appendMessage(message: M): CompletableFuture<Log.MessageMetadata> {
                 check(isOpen) { "Transaction already closed" }
                 val future = CompletableFuture<Log.MessageMetadata>()
                 buffer.add(message to future)
@@ -89,11 +93,11 @@ class RecordingLog(private val instantSource: InstantSource, messages: List<Log.
     }
 
     override fun tailAll(
-        subscriber: Log.Subscriber,
+        subscriber: Log.Subscriber<M>,
         latestProcessedOffset: LogOffset
     ): Log.Subscription = error("tailAll")
 
-    override fun subscribe(subscriber: Log.GroupSubscriber): Log.Subscription {
+    override fun subscribe(subscriber: Log.GroupSubscriber<M>): Log.Subscription {
         val offsets = subscriber.onPartitionsAssigned(listOf(0))
         val nextOffset = offsets[0] ?: 0L
         val subscription = tailAll(subscriber, nextOffset - 1)

@@ -14,7 +14,7 @@
            [java.net InetAddress]
            org.eclipse.jetty.server.Server
            (xtdb.api Xtdb$Config)
-           (xtdb.api.log Log$Message$FlushBlock)
+           (xtdb.api.log SourceMessage$FlushBlock)
            (xtdb.api.metrics HealthzConfig)
            xtdb.api.Xtdb$Config
            (xtdb.database Database Database$Catalog)
@@ -83,7 +83,7 @@
                 ["/system/finish-block" {:name :finish-block
                                          :post (fn [{:keys [^Database db]}]
                                                  (try
-                                                   (let [flush-msg (Log$Message$FlushBlock. (or (.getCurrentBlockIndex (.getBlockCatalog db)) -1))
+                                                   (let [flush-msg (SourceMessage$FlushBlock. (or (.getCurrentBlockIndex (.getBlockCatalog db)) -1))
                                                          msg-id @(.appendMessage (.getSourceLog db) flush-msg)]
                                                      {:status 200, :body "Block flush message sent successfully."
                                                       :headers {"X-XTDB-Message-Id" (str msg-id)}})
@@ -126,7 +126,7 @@
   (let [db (.getPrimary db-cat)
         ^Server server (-> (handler {:meter-registry meter-registry
                                      :db db
-                                     :initial-target-message-id (.getLatestSubmittedMsgId (.getLogProcessor db))
+                                     :initial-target-message-id (.getLatestSubmittedMsgId (.getSourceLog db))
                                      :node node})
                            (j/run-jetty {:host (some-> host (.getHostAddress)), :port port, :async? true, :join? false}))]
 

@@ -21,7 +21,6 @@ import xtdb.database.proto.localLog
 import xtdb.time.InstantUtil.asMicros
 import xtdb.time.InstantUtil.fromMicros
 import java.io.DataInputStream
-import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.channels.Channels
 import java.nio.channels.ClosedByInterruptException
@@ -39,23 +38,22 @@ import kotlin.time.Duration.Companion.seconds
 import kotlin.Int.Companion.SIZE_BYTES as INT_BYTES
 import kotlin.Long.Companion.SIZE_BYTES as LONG_BYTES
 
-class LocalLog(
+class LocalLog<M>(
     rootPath: Path,
+    private val codec: MessageCodec<M>,
     private val instantSource: InstantSource,
     override val epoch: Int,
     val useInstantSourceForNonTx: Boolean,
-    coroutineContext: CoroutineContext = Dispatchers.Default
-) : Log {
+    coroutineContext: CoroutineContext = Dispatchers.Default,
+    logFileName: String = "LOG"
+) : Log<M> {
     private val scope = CoroutineScope(coroutineContext)
     companion object {
-        private val Path.logFilePath get() = resolve("LOG")
-
         private fun messageSizeBytes(size: Int) = 1 + INT_BYTES + LONG_BYTES + size + LONG_BYTES
 
         private const val RECORD_SEPARATOR = 0x1E.toByte()
 
-        private fun readLatestSubmittedOffset(path: Path): LogOffset {
-            val logFilePath = path.logFilePath
+        private fun readLatestSubmittedOffset(logFilePath: Path): LogOffset {
             if (!logFilePath.exists()) return -1
 
             return FileChannel.open(logFilePath).use { ch ->
@@ -91,36 +89,37 @@ class LocalLog(
             }
         }
 
-        private fun FileChannel.readMessage(): Record? {
-            val pos = position()
-            val headerBuf = ByteBuffer.allocateDirect(1 + INT_BYTES + LONG_BYTES)
-                .also { read(it); it.flip() }
-
-            check(headerBuf.get() == RECORD_SEPARATOR) { "log file corrupted at $pos - expected record separator" }
-            val size = headerBuf.getInt()
-
-            val message =
-                Message.parse(ByteBuffer.allocate(size).also { read(it); it.flip() }.array())
-                    ?: return null
-
-            return Record(pos, fromMicros(headerBuf.getLong()), message)
-                .also { position(pos + messageSizeBytes(size)) }
-        }
     }
 
-    internal data class NewMessage(
-        val message: Message,
-        val onCommit: CompletableDeferred<Record>
+    private fun FileChannel.readMessage(): Record<M>? {
+        val pos = position()
+        val headerBuf = ByteBuffer.allocateDirect(1 + INT_BYTES + LONG_BYTES)
+            .also { read(it); it.flip() }
+
+        check(headerBuf.get() == RECORD_SEPARATOR) { "log file corrupted at $pos - expected record separator" }
+        val size = headerBuf.getInt()
+
+        val message =
+            codec.decode(ByteBuffer.allocate(size).also { read(it); it.flip() }.array())
+                ?: return null
+
+        return Record(pos, fromMicros(headerBuf.getLong()), message)
+            .also { position(pos + messageSizeBytes(size)) }
+    }
+
+    internal data class NewMessage<M>(
+        val message: M,
+        val onCommit: CompletableDeferred<Record<M>>
     )
 
-    private val appendCh = Channel<NewMessage>(capacity = 10)
+    private val appendCh = Channel<NewMessage<M>>(capacity = 10)
 
-    private val logFilePath = rootPath.logFilePath
+    private val logFilePath = rootPath.resolve(logFileName)
 
     private val logFileChannel =
         FileChannel.open(logFilePath.createParentDirectories(), CREATE, WRITE, APPEND)
 
-    private fun writeMessages(msgs: List<NewMessage>): Array<Record> {
+    private fun writeMessages(msgs: List<NewMessage<M>>): Array<Record<M>> {
         val initialOffset = logFileChannel.position()
 
         try {
@@ -128,8 +127,8 @@ class LocalLog(
                 val (msg) = msgs[idx]
                 // we only use the instantSource for Tx messages so that the tests
                 // that check files can be deterministic
-                val ts = if (msg is Message.Tx || useInstantSourceForNonTx) instantSource.instant() else Instant.now()
-                val payload = msg.encode()
+                val ts = if (msg is SourceMessage.Tx || useInstantSourceForNonTx) instantSource.instant() else Instant.now()
+                val payload = codec.encode(msg)
                 val size = payload.size
                 val offset = logFileChannel.position()
 
@@ -158,11 +157,11 @@ class LocalLog(
     }
 
     @Volatile
-    override var latestSubmittedOffset: LogOffset = readLatestSubmittedOffset(rootPath)
+    override var latestSubmittedOffset: LogOffset = readLatestSubmittedOffset(logFilePath)
         private set
 
     @Volatile
-    private var committedCh = MutableSharedFlow<Record>(extraBufferCapacity = 100)
+    private var committedCh = MutableSharedFlow<Record<M>>(extraBufferCapacity = 100)
 
     private val mutex = Mutex()
 
@@ -200,20 +199,20 @@ class LocalLog(
         }
     }
 
-    override fun appendMessage(message: Message) =
+    override fun appendMessage(message: M) =
         scope.future {
-            val onCommit = CompletableDeferred<Record>()
+            val onCommit = CompletableDeferred<Record<M>>()
             appendCh.send(NewMessage(message, onCommit))
             val record = onCommit.await()
             MessageMetadata(record.logOffset, record.logTimestamp)
         }
 
-    override fun openAtomicProducer(transactionalId: String) = object : AtomicProducer {
-        override fun openTx() = object : AtomicProducer.Tx {
-            private val buffer = mutableListOf<Pair<Message, CompletableFuture<MessageMetadata>>>()
+    override fun openAtomicProducer(transactionalId: String) = object : AtomicProducer<M> {
+        override fun openTx() = object : AtomicProducer.Tx<M> {
+            private val buffer = mutableListOf<Pair<M, CompletableFuture<MessageMetadata>>>()
             private var isOpen = true
 
-            override fun appendMessage(message: Message): CompletableFuture<MessageMetadata> {
+            override fun appendMessage(message: M): CompletableFuture<MessageMetadata> {
                 check(isOpen) { "Transaction already closed" }
                 val future = CompletableFuture<MessageMetadata>()
                 buffer.add(message to future)
@@ -242,7 +241,7 @@ class LocalLog(
         override fun close() {}
     }
 
-    override fun readLastMessage(): Message? {
+    override fun readLastMessage(): M? {
         if (latestSubmittedOffset < 0) return null
 
         return FileChannel.open(logFilePath).use { ch ->
@@ -251,10 +250,10 @@ class LocalLog(
         }
     }
 
-    override fun tailAll(subscriber: Subscriber, latestProcessedOffset: LogOffset): Subscription {
+    override fun tailAll(subscriber: Subscriber<M>, latestProcessedOffset: LogOffset): Subscription {
         var latestCompletedOffset = latestProcessedOffset
 
-        val ch = Channel<Record>(100)
+        val ch = Channel<Record<M>>(100)
 
         val subscription = scope.launch(SupervisorJob()) {
             launch {
@@ -309,7 +308,7 @@ class LocalLog(
         return Subscription { runBlocking { withTimeout(5.seconds) { subscription.cancelAndJoin() } } }
     }
 
-    override fun subscribe(subscriber: GroupSubscriber): Subscription {
+    override fun subscribe(subscriber: GroupSubscriber<M>): Subscription {
         val offsets = subscriber.onPartitionsAssigned(listOf(0))
         val nextOffset = offsets[0] ?: 0L
         val subscription = tailAll(subscriber, nextOffset - 1)
@@ -355,11 +354,14 @@ class LocalLog(
         fun useInstantSourceForNonTx() = apply { this.useInstantSourceForNonTx = true }
         fun coroutineContext(coroutineContext: CoroutineContext) = apply { this.coroutineContext = coroutineContext }
 
-        override fun openLog(clusters: Map<LogClusterAlias, Cluster>) =
-            LocalLog(path, instantSource, epoch, useInstantSourceForNonTx, coroutineContext)
+        override fun openSourceLog(clusters: Map<LogClusterAlias, Cluster>) =
+            LocalLog(path, SourceMessage.Codec, instantSource, epoch, useInstantSourceForNonTx, coroutineContext)
 
-        override fun openReadOnlyLog(clusters: Map<LogClusterAlias, Cluster>) =
-            ReadOnlyLocalLog(path, epoch, coroutineContext)
+        override fun openReadOnlySourceLog(clusters: Map<LogClusterAlias, Cluster>) =
+            ReadOnlyLocalLog(path, SourceMessage.Codec, epoch, coroutineContext)
+
+        override fun openReplicaLog(clusters: Map<LogClusterAlias, Cluster>) =
+            LocalLog(path, ReplicaMessage.Codec, instantSource, epoch, useInstantSourceForNonTx, coroutineContext, logFileName = "REPLICA_LOG")
 
         override fun writeTo(dbConfig: DatabaseConfig.Builder) {
             dbConfig.localLog = localLog {

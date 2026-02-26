@@ -137,27 +137,27 @@ value TableMetadata {
 -- The LogProcessor dispatches on message kind.
 -- See: log/proto/log.proto (LogMessage oneof)
 
-entity Message {
+entity SourceMessage {
     msg_id: MessageId
     log_timestamp: Instant
-    kind: TxMessage | FlushBlockMessage | TriesAddedMessage | BlockUploadedMessage | AttachDbMessage | DetachDbMessage
+    kind: TxMessage | FlushBlockMessage | TriesAddedMessage | AttachDbMessage | DetachDbMessage
 }
 
-variant TxMessage : Message {
+variant TxMessage : SourceMessage {
     -- Client-submitted transaction operations.
-    -- See: tx/TxWriter.kt, api/log/Log.kt (Log$Message$Tx) — serialised via TxWriter, not proto.
+    -- See: tx/TxWriter.kt, api/log/Log.kt, api/log/SourceMessage.kt (SourceMessage$Tx) — serialised via TxWriter, not proto.
     system_time: Instant?
     default_tz: String?
     user: String?
 }
 
-variant FlushBlockMessage : Message {
+variant FlushBlockMessage : SourceMessage {
     -- Request to finish the current block.
     -- See: log/proto/log.proto (FlushBlock)
     expected_block_idx: Long?
 }
 
-variant TriesAddedMessage : Message {
+variant TriesAddedMessage : SourceMessage {
     -- Notification that new tries exist (from block flush or compaction).
     -- See: log/proto/log.proto (TriesAdded)
     storage_version: Int
@@ -165,21 +165,12 @@ variant TriesAddedMessage : Message {
     tries: List<trie_cat/TrieDetails>
 }
 
-variant BlockUploadedMessage : Message {
-    -- Notification that a block has been written to the object store.
-    -- Sent by the writer after finishBlock(); consumed by read-only nodes to refresh catalogs without polling.
-    -- See: log/proto/log.proto (BlockUploaded)
-    block_index: Long
-    latest_processed_msg_id: MessageId
-    storage_epoch: Int
-}
-
-variant AttachDbMessage : Message {
+variant AttachDbMessage : SourceMessage {
     -- See: log/proto/log.proto (AttachDatabase)
     db_name: String
 }
 
-variant DetachDbMessage : Message {
+variant DetachDbMessage : SourceMessage {
     -- See: log/proto/log.proto (DetachDatabase)
     db_name: String
 }
@@ -376,12 +367,9 @@ rule CompactionJobCompletes {
 
     ensures:
         -- Data file uploaded first; meta file presence is the completion marker.
-        -- Append tries-added to replica-log.
+        -- Append tries-added to source-log; source processor will forward to replica.
         let tries_added = TriesAddedMessage.created(tries: job.output_tries)
-        tries_added appended to database.replica_log
-
-        -- Eagerly register in trie catalog (idempotent).
-        trie_cat/trie_catalog.addTries(job.output_tries, tries_added.log_timestamp)
+        tries_added appended to database.source_log
 }
 
 

@@ -6,39 +6,35 @@ import kotlinx.coroutines.runBlocking
 import org.apache.arrow.memory.BufferAllocator
 import xtdb.api.TransactionAborted
 import xtdb.api.TransactionCommitted
-import xtdb.api.TransactionKey
-import xtdb.time.InstantUtil
-import xtdb.util.TransitFormat.MSGPACK
-import xtdb.util.readTransit
 import xtdb.api.TransactionResult
+import xtdb.api.log.DbOp
 import xtdb.api.log.Log
-import xtdb.api.log.Log.Message
 import xtdb.api.log.MessageId
+import xtdb.api.log.ReplicaMessage
 import xtdb.api.log.Watchers
 import xtdb.api.storage.Storage
+import xtdb.block.proto.Block
 import xtdb.catalog.BlockCatalog
 import xtdb.catalog.BlockCatalog.Companion.allBlockFiles
 import xtdb.compactor.Compactor
 import xtdb.database.Database
 import xtdb.database.DatabaseState
 import xtdb.database.DatabaseStorage
-import xtdb.block.proto.Block
 import xtdb.database.proto.DatabaseConfig
-import xtdb.error.Anomaly
-import xtdb.error.Conflict
 import xtdb.error.Fault
-import xtdb.error.Incorrect
 import xtdb.error.Interrupted
-import xtdb.error.NotFound
-import xtdb.trie.BlockIndex
 import xtdb.table.TableRef
+import xtdb.time.InstantUtil
+import xtdb.trie.BlockIndex
 import xtdb.util.MsgIdUtil.msgIdToEpoch
 import xtdb.util.MsgIdUtil.msgIdToOffset
 import xtdb.util.MsgIdUtil.offsetToMsgId
 import xtdb.util.StringUtil.asLexHex
+import xtdb.util.TransitFormat.MSGPACK
 import xtdb.util.debug
 import xtdb.util.error
 import xtdb.util.logger
+import xtdb.util.readTransit
 import java.nio.channels.ClosedByInterruptException
 import kotlin.coroutines.cancellation.CancellationException
 
@@ -59,10 +55,11 @@ class ReplicaLogProcessor @JvmOverloads constructor(
     private val liveIndex: LiveIndex,
     private val compactor: Compactor.ForDatabase,
     private val skipTxs: Set<MessageId>,
+    private val watchers: Watchers,
     private val maxBufferedRecords: Int = 1024,
     private val dbCatalog: Database.Catalog? = null,
     private val txSource: Indexer.TxSource? = null
-) : LogProcessor, Log.Subscriber, AutoCloseable {
+) : LogProcessor, Log.Subscriber<ReplicaMessage>, AutoCloseable {
 
     init {
         require((dbCatalog != null) == (dbState.name == "xtdb")) {
@@ -84,7 +81,7 @@ class ReplicaLogProcessor @JvmOverloads constructor(
     // Read-only block transition: when the live index is full, we buffer messages
     // until BlockUploaded arrives, then transition and replay.
     private var pendingBlockIdx: BlockIndex? = null
-    private val bufferedRecords: MutableList<Log.Record> = mutableListOf()
+    private val bufferedRecords: MutableList<Log.Record<ReplicaMessage>> = mutableListOf()
 
     @Volatile
     override var latestProcessedMsgId: MessageId =
@@ -97,11 +94,6 @@ class ReplicaLogProcessor @JvmOverloads constructor(
     override val latestProcessedOffset = blockCatalog.latestProcessedMsgId?.let {
         if (msgIdToEpoch(it) == epoch) msgIdToOffset(it) else -1
     } ?: -1
-
-    override val latestSubmittedMsgId: MessageId
-        get() = offsetToMsgId(epoch, log.latestSubmittedOffset)
-
-    private val watchers = Watchers(latestProcessedMsgId)
 
     override val ingestionError get() = watchers.exception
 
@@ -117,7 +109,7 @@ class ReplicaLogProcessor @JvmOverloads constructor(
         allocator.close()
     }
 
-    override fun processRecords(records: List<Log.Record>) = runBlocking {
+    override fun processRecords(records: List<Log.Record<ReplicaMessage>>) = runBlocking {
         val queue = ArrayDeque(records)
 
         while (queue.isNotEmpty()) {
@@ -127,7 +119,7 @@ class ReplicaLogProcessor @JvmOverloads constructor(
             try {
                 if (pendingBlockIdx != null) {
                     val msg = record.message
-                    if (msg is Message.BlockUploaded && msg.blockIndex == pendingBlockIdx && msg.storageEpoch == bufferPool.epoch) {
+                    if (msg is ReplicaMessage.BlockUploaded && msg.blockIndex == pendingBlockIdx && msg.storageEpoch == bufferPool.epoch) {
                         doBlockTransition()
 
                         // Splice buffered records to the front of the queue so they're
@@ -149,11 +141,9 @@ class ReplicaLogProcessor @JvmOverloads constructor(
                 val res = processRecord(msgId, record)
 
                 when (record.message) {
-                    is Message.ResolvedTx, is Message.BlockUploaded, is Message.TriesAdded ->
+                    is ReplicaMessage.ResolvedTx, is ReplicaMessage.BlockUploaded, is ReplicaMessage.TriesAdded ->
                         watchers.notify(msgId, res)
-                    // Other messages (Tx, AttachDatabase, DetachDatabase, FlushBlock) don't notify —
-                    // the source resolves them into messages that do.
-                    else -> {}
+                    is ReplicaMessage.BlockBoundary -> {}
                 }
             } catch (e: ClosedByInterruptException) {
                 watchers.notify(msgId, e)
@@ -183,17 +173,17 @@ class ReplicaLogProcessor @JvmOverloads constructor(
         }
     }
 
-    private fun processRecord(msgId: MessageId, record: Log.Record): TransactionResult? {
+    private fun processRecord(msgId: MessageId, record: Log.Record<ReplicaMessage>): TransactionResult? {
         LOG.debug("Processing message $msgId, ${record.message.javaClass.simpleName}")
 
         return when (val msg = record.message) {
-                is Message.BlockBoundary -> {
+                is ReplicaMessage.BlockBoundary -> {
                     pendingBlockIdx = msg.blockIndex
                     LOG.debug("waiting for block 'b${pendingBlockIdx!!.asLexHex}' via BlockUploaded message...")
                     null
                 }
 
-                is Message.TriesAdded -> {
+                is ReplicaMessage.TriesAdded -> {
                     // Source writes TriesAdded to the source log. When the replica
                     // refreshes from storage it calls trieCatalog.refresh() directly,
                     // so we only need this for read-only nodes that haven't refreshed yet.
@@ -204,7 +194,7 @@ class ReplicaLogProcessor @JvmOverloads constructor(
                     null
                 }
 
-                is Message.ResolvedTx -> {
+                is ReplicaMessage.ResolvedTx -> {
                     liveIndex.importTx(msg)
 
                     txSource?.onCommit(msg)
@@ -214,11 +204,11 @@ class ReplicaLogProcessor @JvmOverloads constructor(
                     if (msg.committed) {
                         // Handle attach/detach catalog side-effects encoded in the ResolvedTx
                         when (val dbOp = msg.dbOp) {
-                            is Message.DbOp.Attach -> {
+                            is DbOp.Attach -> {
                                 secondaryDatabases[dbOp.dbName] = dbOp.config.serializedConfig
                                 dbCatalog!!.attach(dbOp.dbName, dbOp.config)
                             }
-                            is Message.DbOp.Detach -> {
+                            is DbOp.Detach -> {
                                 secondaryDatabases.remove(dbOp.dbName)
                                 dbCatalog!!.detach(dbOp.dbName)
                             }
@@ -234,10 +224,8 @@ class ReplicaLogProcessor @JvmOverloads constructor(
                     }
                 }
 
-                is Message.Tx, is Message.AttachDatabase, is Message.DetachDatabase, is Message.FlushBlock -> null
-
                 // Block transitions are handled by the pending-block gate in processRecords.
-                is Message.BlockUploaded -> null
+                is ReplicaMessage.BlockUploaded -> null
             }.also {
                 latestProcessedMsgId = msgId
                 LOG.debug("Processed message $msgId")
@@ -268,5 +256,4 @@ class ReplicaLogProcessor @JvmOverloads constructor(
         watchers.notify(msgId, e)
     }
 
-    override fun awaitAsync(msgId: MessageId) = watchers.awaitAsync(msgId)
 }

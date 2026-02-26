@@ -43,9 +43,9 @@ class KafkaClusterTest {
 
     @Test
     fun `round-trips messages`() = runTest(timeout = 30.seconds) {
-        val msgs = synchronizedList(mutableListOf<List<Record>>())
+        val msgs = synchronizedList(mutableListOf<List<Record<SourceMessage>>>())
 
-        val subscriber = mockk<Subscriber> {
+        val subscriber = mockk<Subscriber<SourceMessage>> {
             every { processRecords(capture(msgs)) } returns Unit
         }
 
@@ -67,17 +67,17 @@ class KafkaClusterTest {
             .pollDuration(Duration.ofMillis(100))
             .open().use { cluster ->
                 KafkaCluster.LogFactory("my-cluster", topicName)
-                    .openLog(mapOf("my-cluster" to cluster))
+                    .openSourceLog(mapOf("my-cluster" to cluster))
                     .use { log ->
                         log.tailAll(subscriber, -1).use { _ ->
                             val txPayload = ByteBuffer.allocate(9).put(-1).putLong(42).flip().array()
-                            log.appendMessage(Message.Tx(txPayload)).await()
+                            log.appendMessage(SourceMessage.Tx(txPayload)).await()
 
-                            log.appendMessage(Message.FlushBlock(12)).await()
+                            log.appendMessage(SourceMessage.FlushBlock(12)).await()
 
-                            log.appendMessage(Message.TriesAdded(Storage.VERSION, 0, addedTrieDetails)).await()
+                            log.appendMessage(SourceMessage.TriesAdded(Storage.VERSION, 0, addedTrieDetails)).await()
 
-                            log.appendMessage(Message.AttachDatabase("foo", databaseConfig))
+                            log.appendMessage(SourceMessage.AttachDatabase("foo", databaseConfig))
 
                             while (synchronized(msgs) { msgs.flatten().size } < 4) delay(100)
                         }
@@ -89,28 +89,28 @@ class KafkaClusterTest {
         assertEquals(4, allMsgs.size)
 
         allMsgs[0].message.let {
-            check(it is Message.Tx)
+            check(it is SourceMessage.Tx)
             assertEquals(42, ByteBuffer.wrap(it.payload).getLong(1))
         }
 
         allMsgs[1].message.let {
-            check(it is Message.FlushBlock)
+            check(it is SourceMessage.FlushBlock)
             assertEquals(12, it.expectedBlockIdx)
         }
 
         allMsgs[2].message.let {
-            check(it is Message.TriesAdded)
+            check(it is SourceMessage.TriesAdded)
             assertEquals(addedTrieDetails, it.tries)
         }
 
         allMsgs[3].message.let {
-            check(it is Message.AttachDatabase)
+            check(it is SourceMessage.AttachDatabase)
             assertEquals("foo", it.dbName)
             assertEquals(databaseConfig, it.config)
         }
     }
 
-    private fun txMessage(id: Byte) = Message.Tx(byteArrayOf(-1, id))
+    private fun txMessage(id: Byte) = SourceMessage.Tx(byteArrayOf(-1, id))
 
     @Test
     fun `readLastMessage returns null when topic is empty`() = runTest(timeout = 30.seconds)  {
@@ -120,7 +120,7 @@ class KafkaClusterTest {
             .pollDuration(Duration.ofMillis(100))
             .open().use { cluster ->
                 KafkaCluster.LogFactory("my-cluster", topicName)
-                    .openLog(mapOf("my-cluster" to cluster))
+                    .openSourceLog(mapOf("my-cluster" to cluster))
                     .use { log ->
                         assertEquals(null, log.readLastMessage())
                     }
@@ -135,12 +135,12 @@ class KafkaClusterTest {
             .pollDuration(Duration.ofMillis(100))
             .open().use { cluster ->
                 KafkaCluster.LogFactory("my-cluster", topicName)
-                    .openLog(mapOf("my-cluster" to cluster))
+                    .openSourceLog(mapOf("my-cluster" to cluster))
                     .use { log ->
                         log.appendMessage(txMessage(1)).await()
 
                         val lastMessage = log.readLastMessage()
-                        check(lastMessage is Message.Tx)
+                        check(lastMessage is SourceMessage.Tx)
                         assertArrayEquals(byteArrayOf(-1, 1), lastMessage.payload)
                     }
             }
@@ -154,14 +154,14 @@ class KafkaClusterTest {
             .pollDuration(Duration.ofMillis(100))
             .open().use { cluster ->
                 KafkaCluster.LogFactory("my-cluster", topicName)
-                    .openLog(mapOf("my-cluster" to cluster))
+                    .openSourceLog(mapOf("my-cluster" to cluster))
                     .use { log ->
                         log.appendMessage(txMessage(1)).await()
                         log.appendMessage(txMessage(2)).await()
                         log.appendMessage(txMessage(3)).await()
 
                         val lastMessage = log.readLastMessage()
-                        check(lastMessage is Message.Tx)
+                        check(lastMessage is SourceMessage.Tx)
                         assertArrayEquals(byteArrayOf(-1, 3), lastMessage.payload)
                     }
             }

@@ -23,7 +23,8 @@
             [xtdb.types :as types]
             [xtdb.util :as util]
             [xtdb.vector.writer :as vw]
-            [clojure.test :as t])
+            [clojure.test :as t]
+            [clojure.core :as c])
   (:import io.micrometer.core.instrument.Counter
            [java.io Closeable DataInputStream EOFException IOException PushbackInputStream]
            [java.lang Thread$State]
@@ -2012,3 +2013,6 @@
                                                                          :playground? true}))]
        (log/infof "Playground started at postgres://%s:%d" (.getHostAddress host) port)
        srv))))
+
+(comment
+  (user/set-log-level! 'xtdb.pgwire :debug))

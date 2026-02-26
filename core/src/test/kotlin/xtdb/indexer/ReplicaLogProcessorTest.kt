@@ -9,6 +9,9 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import xtdb.api.log.InMemoryLog
 import xtdb.api.log.Log
+import xtdb.api.log.ReplicaMessage
+import xtdb.api.log.SourceMessage
+import xtdb.api.log.Watchers
 import xtdb.api.storage.ObjectStore
 import xtdb.block.proto.block
 import xtdb.catalog.BlockCatalog
@@ -37,7 +40,7 @@ class ReplicaLogProcessorTest {
         flushedTxId = flushedTxId
     )
 
-    private fun resolvedTx(txId: Long = 0) = Log.Message.ResolvedTx(
+    private fun resolvedTx(txId: Long = 0) = ReplicaMessage.ResolvedTx(
         txId = txId,
         systemTimeMicros = Instant.now().toEpochMilli() * 1000,
         committed = true,
@@ -78,11 +81,11 @@ class ReplicaLogProcessorTest {
 
     @Test
     fun `buffer overflow stops ingestion`() {
-        val log = InMemoryLog(InstantSource.system(), 0)
+        val log = InMemoryLog<SourceMessage>(InstantSource.system(), 0)
         val blockCatalog = BlockCatalog("test", null)
         val liveIndex = mockk<LiveIndex>(relaxed = true)
 
-        val dbStorage = DatabaseStorage(log, log, BufferPool.UNUSED, null)
+        val dbStorage = DatabaseStorage(log, null, BufferPool.UNUSED, null)
         val dbState = DatabaseState(
             "test", blockCatalog,
             mockk<TableCatalog>(relaxed = true), mockk<TrieCatalog>(relaxed = true),
@@ -96,6 +99,7 @@ class ReplicaLogProcessorTest {
                 liveIndex,
                 mockk<Compactor.ForDatabase>(relaxed = true),
                 emptySet(),
+                watchers = Watchers(-1),
                 maxBufferedRecords = 2
             )
 
@@ -103,10 +107,10 @@ class ReplicaLogProcessorTest {
             // BlockBoundary triggers pendingBlockIdx.
             // Then 3 more records get buffered, exceeding maxBufferedRecords=2.
             val records = listOf(
-                Log.Record(0, now, Log.Message.BlockBoundary(0)),
-                Log.Record(1, now, Log.Message.FlushBlock(999)),
-                Log.Record(2, now, Log.Message.FlushBlock(999)),
-                Log.Record(3, now, Log.Message.FlushBlock(999)),
+                Log.Record(0, now, ReplicaMessage.BlockBoundary(0)),
+                Log.Record(1, now, ReplicaMessage.TriesAdded(0, 0, emptyList())),
+                Log.Record(2, now, ReplicaMessage.TriesAdded(0, 0, emptyList())),
+                Log.Record(3, now, ReplicaMessage.TriesAdded(0, 0, emptyList())),
             )
 
             assertThrows<Exception> { lp.processRecords(records) }
@@ -116,7 +120,7 @@ class ReplicaLogProcessorTest {
 
     @Test
     fun `replay handles block transitions during replay`() {
-        val log = InMemoryLog(InstantSource.system(), 0)
+        val log = InMemoryLog<SourceMessage>(InstantSource.system(), 0)
         val blockCatalog = BlockCatalog("test", null)
         val liveIndex = mockk<LiveIndex>(relaxed = true)
 
@@ -135,7 +139,7 @@ class ReplicaLogProcessorTest {
         }
 
         RootAllocator().use { allocator ->
-            val dbStorage = DatabaseStorage(log, log, bufferPool, null)
+            val dbStorage = DatabaseStorage(log, null, bufferPool, null)
             val dbState = DatabaseState(
                 "test", blockCatalog,
                 mockk<TableCatalog>(relaxed = true), mockk<TrieCatalog>(relaxed = true),
@@ -148,6 +152,7 @@ class ReplicaLogProcessorTest {
                 liveIndex,
                 mockk<Compactor.ForDatabase>(relaxed = true),
                 emptySet(),
+                watchers = Watchers(-1),
             )
 
             val now = Instant.now()
@@ -158,11 +163,11 @@ class ReplicaLogProcessorTest {
             // During replay: BlockBoundary(1) sets pendingBlockIdx=1, starts buffering again.
             // BlockUploaded(1) now matches → transition block 1.
             val records = listOf(
-                Log.Record(0, now, Log.Message.BlockBoundary(0)),
+                Log.Record(0, now, ReplicaMessage.BlockBoundary(0)),
                 Log.Record(1, now, resolvedTx(1)),
-                Log.Record(2, now, Log.Message.BlockBoundary(1)),
-                Log.Record(3, now, Log.Message.BlockUploaded(1, 0, 0)),
-                Log.Record(4, now, Log.Message.BlockUploaded(0, 0, 0)),
+                Log.Record(2, now, ReplicaMessage.BlockBoundary(1)),
+                Log.Record(3, now, ReplicaMessage.BlockUploaded(1, 0, 0)),
+                Log.Record(4, now, ReplicaMessage.BlockUploaded(0, 0, 0)),
             )
 
             lp.processRecords(records)

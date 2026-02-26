@@ -151,12 +151,13 @@ class KafkaCluster(
         override fun open(): KafkaCluster = KafkaCluster(configMap, pollDuration, coroutineContext)
     }
 
-    private inner class KafkaLog(
+    private inner class KafkaLog<M>(
+        private val codec: MessageCodec<M>,
         private val clusterAlias: LogClusterAlias,
         private val topic: String,
         override val epoch: Int,
         private val groupId: String?
-    ) : Log {
+    ) : Log<M> {
 
         private fun readLatestSubmittedMessage(kafkaConfigMap: KafkaConfigMap): LogOffset =
             kafkaConfigMap.openConsumer().use { c ->
@@ -167,12 +168,12 @@ class KafkaCluster(
         private val latestSubmittedOffset0 = AtomicLong(readLatestSubmittedMessage(kafkaConfigMap))
         override val latestSubmittedOffset get() = latestSubmittedOffset0.get()
 
-        override fun appendMessage(message: Message): CompletableFuture<MessageMetadata> =
+        override fun appendMessage(message: M): CompletableFuture<MessageMetadata> =
             scope.future {
                 CompletableDeferred<MessageMetadata>()
                     .also { res ->
                         producer.send(
-                            ProducerRecord(topic, null, Unit, message.encode())
+                            ProducerRecord(topic, null, Unit, codec.encode(message))
                         ) { recordMetadata, e ->
                             if (e == null) res.complete(
                                 MessageMetadata(
@@ -186,7 +187,7 @@ class KafkaCluster(
                     .also { messageMetadata -> latestSubmittedOffset0.updateAndGet { it.coerceAtLeast(messageMetadata.logOffset) } }
             }
 
-        override fun readLastMessage(): Message? =
+        override fun readLastMessage(): M? =
             kafkaConfigMap.openConsumer().use { c ->
                 val tp = TopicPartition(topic, 0)
                 val lastOffset = c.endOffsets(listOf(tp))[tp]?.minus(1)?.takeIf { it >= 0 } ?: return null
@@ -194,10 +195,10 @@ class KafkaCluster(
                 c.seek(tp, lastOffset)
 
                 val records = c.poll(pollDuration).records(topic)
-                records.firstOrNull()?.let { record -> Message.parse(record.value()) }
+                records.firstOrNull()?.let { record -> codec.decode(record.value()) }
             }
 
-        override fun openAtomicProducer(transactionalId: String) = object : AtomicProducer {
+        override fun openAtomicProducer(transactionalId: String) = object : AtomicProducer<M> {
             private val producer = KafkaProducer(
                 mapOf(
                     "enable.idempotence" to "true",
@@ -209,18 +210,18 @@ class KafkaCluster(
                 ByteArraySerializer()
             ).also { it.initTransactions() }
 
-            override fun openTx(): AtomicProducer.Tx {
+            override fun openTx(): AtomicProducer.Tx<M> {
                 producer.beginTransaction()
 
-                return object : AtomicProducer.Tx {
+                return object : AtomicProducer.Tx<M> {
                     private val futures = mutableListOf<CompletableFuture<MessageMetadata>>()
                     private var isOpen = true
 
-                    override fun appendMessage(message: Message): CompletableFuture<MessageMetadata> {
+                    override fun appendMessage(message: M): CompletableFuture<MessageMetadata> {
                         check(isOpen) { "Transaction already closed" }
                         val future = CompletableFuture<MessageMetadata>()
                         futures.add(future)
-                        producer.send(ProducerRecord(topic, null, Unit, message.encode())) { recordMetadata, e ->
+                        producer.send(ProducerRecord(topic, null, Unit, codec.encode(message))) { recordMetadata, e ->
                             if (e == null) {
                                 future.complete(
                                     MessageMetadata(
@@ -262,7 +263,7 @@ class KafkaCluster(
             }
         }
 
-        override fun tailAll(subscriber: Subscriber, latestProcessedOffset: LogOffset): Subscription {
+        override fun tailAll(subscriber: Subscriber<M>, latestProcessedOffset: LogOffset): Subscription {
             val job = scope.launch {
                 kafkaConfigMap.openConsumer().use { c ->
                     TopicPartition(topic, 0).also { tp ->
@@ -280,7 +281,7 @@ class KafkaCluster(
 
                             subscriber.processRecords(
                                 records.mapNotNull { record ->
-                                    Message.parse(record.value())
+                                    codec.decode(record.value())
                                         ?.let { msg ->
                                             Record(
                                                 record.offset(),
@@ -298,7 +299,7 @@ class KafkaCluster(
             return Subscription { runBlocking { withTimeout(5.seconds) { job.cancelAndJoin() } } }
         }
 
-        override fun subscribe(subscriber: GroupSubscriber): Subscription {
+        override fun subscribe(subscriber: GroupSubscriber<M>): Subscription {
             val groupId = requireNotNull(groupId) { "groupId must be configured to use subscribe" }
 
             val consumerConfig = kafkaConfigMap + mapOf("group.id" to groupId)
@@ -334,7 +335,7 @@ class KafkaCluster(
 
                             subscriber.processRecords(
                                 records.mapNotNull { record ->
-                                    Message.parse(record.value())
+                                    codec.decode(record.value())
                                         ?.let { msg ->
                                             Record(
                                                 record.offset(),
@@ -360,16 +361,20 @@ class KafkaCluster(
     data class LogFactory @JvmOverloads constructor(
         val cluster: LogClusterAlias,
         val topic: String,
+        var replicaCluster: LogClusterAlias = cluster,
+        var replicaTopic: String = "$topic-replica",
         var autoCreateTopic: Boolean = true,
         var epoch: Int = 0,
         var groupId: String? = null
     ) : Factory {
 
+        fun replicaCluster(replicaCluster: LogClusterAlias) = apply { this.replicaCluster = replicaCluster }
+        fun replicaTopic(replicaTopic: String) = apply { this.replicaTopic = replicaTopic }
         fun autoCreateTopic(autoCreateTopic: Boolean) = apply { this.autoCreateTopic = autoCreateTopic }
         fun epoch(epoch: Int) = apply { this.epoch = epoch }
         fun groupId(groupId: String) = apply { this.groupId = groupId }
 
-        override fun openLog(clusters: Map<LogClusterAlias, Cluster>): Log {
+        override fun openSourceLog(clusters: Map<LogClusterAlias, Cluster>): Log<SourceMessage> {
             val clusterAlias = this.cluster
             val cluster = requireNotNull(clusters[clusterAlias] as? KafkaCluster) {
                 "missing Kafka cluster: '$clusterAlias'"
@@ -381,11 +386,26 @@ class KafkaCluster(
                 admin.ensureTopicExists(topic, autoCreateTopic)
             }
 
-            return cluster.KafkaLog(clusterAlias, topic, epoch, groupId)
+            return cluster.KafkaLog(SourceMessage.Codec, clusterAlias, topic, epoch, groupId)
         }
 
-        override fun openReadOnlyLog(clusters: Map<LogClusterAlias, Cluster>) =
-            ReadOnlyLog(openLog(clusters))
+        override fun openReadOnlySourceLog(clusters: Map<LogClusterAlias, Cluster>) =
+            ReadOnlyLog(openSourceLog(clusters))
+
+        override fun openReplicaLog(clusters: Map<LogClusterAlias, Cluster>): Log<ReplicaMessage> {
+            val clusterAlias = this.replicaCluster
+            val cluster = requireNotNull(clusters[clusterAlias] as? KafkaCluster) {
+                "missing Kafka cluster: '$clusterAlias'"
+            }
+
+            val configMap = cluster.kafkaConfigMap
+
+            AdminClient.create(configMap).use { admin ->
+                admin.ensureTopicExists(replicaTopic, autoCreateTopic)
+            }
+
+            return cluster.KafkaLog(ReplicaMessage.Codec, clusterAlias, replicaTopic, epoch, groupId)
+        }
 
         override fun writeTo(dbConfig: DatabaseConfig.Builder) {
             dbConfig.setOtherLog(ProtoAny.pack(kafkaLogConfig {
