@@ -17,6 +17,9 @@ on:
   schedule:
     - cron: '0 19 * * 1-5'
 
+permissions:
+  contents: write
+
 jobs:
   scan-perf:
     if: github.event_name == 'workflow_dispatch' || github.repository == 'xtdb/xtdb'
@@ -42,7 +45,41 @@ jobs:
             -PtwelveGBJvm \
             -PnItems=${{ inputs.n_items || '10000000' }} \
             -PidType=${{ inputs.id_type || 'uuid' }} \
+            -PbenchLogFile=benchmark.jsonl \
             2>&1 | tee benchmark.log
+
+      - name: Extract Benchmark Results
+        if: success()
+        run: |
+          set -euo pipefail
+          N_ITEMS="${{ inputs.n_items || '10000000' }}"
+          ID_TYPE="${{ inputs.id_type || 'uuid' }}"
+          LABEL="n=${N_ITEMS},id=${ID_TYPE}"
+
+          jq -s --arg label "$LABEL" '
+            [ .[] | select(.stage and ."time-taken-ms") ] |
+            [ .[] | select(.stage == "summary" or
+                           .stage == "profile-scan-points" or
+                           .stage == "profile-scan-sets" or
+                           .stage == "profile-scan-content-key" or
+                           .stage == "profile-scan-filters") ] |
+            map({
+              name: (.stage + " (" + $label + ")"),
+              unit: "ms",
+              value: (."time-taken-ms")
+            })
+          ' benchmark.jsonl > benchmark-result.json
+
+      - name: Store Benchmark Result
+        if: success() && github.ref == 'refs/heads/main'
+        uses: benchmark-action/github-action-benchmark@4bdcce38c94cec68da58d012ac24b7b1155efe8b # v1
+        with:
+          tool: customSmallerIsBetter
+          output-file-path: benchmark-result.json
+          gh-pages-branch: gh-pages
+          benchmark-data-dir-path: dev/bench/scan-perf
+          auto-push: true
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Compose Slack Message
         id: compose
