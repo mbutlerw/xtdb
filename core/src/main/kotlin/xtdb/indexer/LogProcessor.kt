@@ -6,14 +6,14 @@ import xtdb.api.log.*
 import xtdb.api.log.Log.AtomicProducer.Companion.withTx
 import xtdb.database.DatabaseState
 import xtdb.database.DatabaseStorage
+import xtdb.util.StringUtil.asLexHex
 import xtdb.util.closeOnCatch
 import xtdb.util.debug
 import xtdb.util.info
 import xtdb.util.logger
-
 private val LOG = LogProcessor::class.logger
 
-class LogProcessor(
+class LogProcessor @JvmOverloads constructor(
     private val procFactory: ProcessorFactory,
     dbStorage: DatabaseStorage,
     private val dbState: DatabaseState,
@@ -78,15 +78,6 @@ class LogProcessor(
         pendingBlock: PendingBlock? = null,
     ): FollowerSystem =
         procFactory.openFollower(pendingBlock, latestSourceMsgId, latestReplicaMsgId).closeOnCatch { proc ->
-            LOG.info {
-                buildString {
-                    append("starting follower: ")
-                    append("pending block: ${pendingBlock != null}, ")
-                    append("src: $latestSourceMsgId, ")
-                    append("replica: $latestReplicaMsgId")
-                }
-            }
-
             FollowerSystem(proc, replicaLog.tailAll(latestReplicaMsgId, proc))
         }
 
@@ -95,6 +86,13 @@ class LogProcessor(
         dbState.blockCatalog.let { openFollowerSystem(it.latestProcessedMsgId ?: -1, it.boundaryReplicaMsgId ?: -1) }
 
     init {
+        val blockCatalog = dbState.blockCatalog
+        LOG.info(
+            "starting follower — block: ${blockCatalog.currentBlockIndex?.asLexHex}, " +
+                    "source: ${blockCatalog.latestProcessedMsgId}, " +
+                    "replica: ${blockCatalog.boundaryReplicaMsgId}"
+        )
+
         meterRegistry?.let { reg ->
             Gauge.builder("xtdb.log.leader", this) { if (it.sys is LeaderSystem) 1.0 else 0.0 }
                 .description("1 if this node is the log leader, 0 if follower")
@@ -176,6 +174,7 @@ class LogProcessor(
     }
 
     override fun close() {
+        LOG.debug("closing log processor")
         sys.close()
     }
 }
