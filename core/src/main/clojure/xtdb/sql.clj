@@ -138,6 +138,19 @@
                             (-> (symbol (format "?_sq_%s_%d" (name sym) (dec (swap! !id-count inc))))
                                 (vary-meta assoc :correlated-column? true))))))))
 
+(defn- outer-agg-sym
+  "When an aggregate's args are all correlated (outer refs), register in outer !aggs and return correlated param.
+   Returns nil if not an outer aggregate."
+  [env ^Map outer-sq-refs agg-sym agg-entry expr]
+  (let [^Map outer-aggs (:outer-aggs env)]
+    (when (and outer-aggs outer-sq-refs
+               (empty? (lp/expr-symbols expr))
+               (seq (lp/expr-correlated-symbols expr)))
+      (let [inv-refs (set/map-invert (into {} outer-sq-refs))
+            de-corr-entry (w/postwalk #(get inv-refs % %) agg-entry)]
+        (.put outer-aggs agg-sym de-corr-entry)
+        (->sq-sym agg-sym env outer-sq-refs)))))
+
 (defrecord SubqueryScope [env, scope, ^Map !sq-refs]
   Scope
   (available-cols [_] (available-cols scope))
@@ -157,14 +170,16 @@
   PlanError
   (error-string [_] (format "Subquery arity error: expected a single column, got %d" given-col-count)))
 
-(defn- plan-sq [^ParserRuleContext sq-ctx, {:keys [!id-count] :as env}, scope, ^Map !subqs, {:keys [assert-single-col?] :as sq-opts}]
+(defn- plan-sq [^ParserRuleContext sq-ctx, {:keys [!id-count] :as env}, scope, ^Map !subqs, {:keys [assert-single-col? outer-aggs] :as sq-opts}]
   (if-not !subqs
     (add-err! env (->SubqueryDisallowed))
 
     (let [sq-sym (-> (->col-sym (str "_sq_" (swap! !id-count inc)))
                      (vary-meta assoc :sq-out-sym? true))
           !sq-refs (HashMap.)
-          query-plan (-> sq-ctx (.accept (->QueryPlanVisitor env (->SubqueryScope env scope !sq-refs))))
+          env' (cond-> env
+                 outer-aggs (assoc :outer-aggs outer-aggs :outer-sq-refs !sq-refs))
+          query-plan (-> sq-ctx (.accept (->QueryPlanVisitor env' (->SubqueryScope env' scope !sq-refs))))
           sq-arity (count (:col-syms query-plan))]
 
       (when (and assert-single-col? (not= 1 sq-arity))
@@ -1909,7 +1924,20 @@
 
   (visitAggregateFunctionExpr [{:keys [!aggs !agg-subqs] :as this} ctx]
     (if-not !aggs
-      (add-err! env (->AggregatesDisallowed))
+      (if-let [outer-aggs (:outer-aggs env)]
+        (let [outer-sq-refs (:outer-sq-refs env)
+              ;; strip outer-aggs from env so visitSetFunction doesn't double-handle via outer-agg-sym
+              agg-sym (-> (.aggregateFunction ctx)
+                          (.accept (-> this
+                                       (assoc :!aggs outer-aggs :!subqs !agg-subqs)
+                                       (assoc :env (dissoc env :outer-aggs :outer-sq-refs)))))
+              ;; de-correlate the entry just registered in outer-aggs
+              inv-refs (set/map-invert (into {} outer-sq-refs))
+              entry (.get ^Map outer-aggs agg-sym)
+              de-corr-entry (w/postwalk #(get inv-refs % %) entry)]
+          (.put ^Map outer-aggs agg-sym de-corr-entry)
+          (->sq-sym agg-sym env outer-sq-refs))
+        (add-err! env (->AggregatesDisallowed)))
       (-> (.aggregateFunction ctx) (.accept (assoc this :!subqs !agg-subqs)))))
 
   (visitCountStarFunction [{{:keys [!id-count]} :env, :keys [^Map !aggs]} _ctx]
@@ -1925,16 +1953,16 @@
       (let [agg-sym (-> (->col-sym (str "_array_agg_out" (swap! !id-count inc)))
                         (vary-meta assoc :agg-out-sym? true))
             expr (-> (.expr ctx)
-                     (.accept (assoc this :!aggs nil, :scope (assoc scope :!implied-gicrs nil))))]
-        (.put !aggs agg-sym
-              (if (:column? (meta expr))
-                {:agg-expr (list 'array-agg expr)}
-                (let [in-sym (-> (->col-sym (str "_array_agg_in" (swap! !id-count inc)))
-                                 (vary-meta assoc :agg-in-sym? true))]
-                  {:agg-expr (list 'array-agg in-sym)
-                   :in-projection (->ProjectedCol {in-sym expr} in-sym)})))
-
-        agg-sym)))
+                     (.accept (assoc this :!aggs nil, :scope (assoc scope :!implied-gicrs nil))))
+            agg-entry (if (:column? (meta expr))
+                        {:agg-expr (list 'array-agg expr)}
+                        (let [in-sym (-> (->col-sym (str "_array_agg_in" (swap! !id-count inc)))
+                                         (vary-meta assoc :agg-in-sym? true))]
+                          {:agg-expr (list 'array-agg in-sym)
+                           :in-projection (->ProjectedCol {in-sym expr} in-sym)}))]
+        (or (outer-agg-sym env (:outer-sq-refs env) agg-sym agg-entry expr)
+            (do (.put !aggs agg-sym agg-entry)
+                agg-sym)))))
 
   (visitSetFunction [{{:keys [!id-count]} :env, :keys [^Map !aggs], :as this} ctx]
     (let [set-fn (symbol (str/lower-case (cond-> (.getText (.setFunctionType ctx))
@@ -1943,17 +1971,16 @@
           agg-sym (-> (->col-sym (str "_" set-fn "_out_" (swap! !id-count inc)))
                       (vary-meta assoc :agg-out-sym? true))
           expr (-> (.expr ctx)
-                   (.accept (assoc this :!aggs nil, :scope (assoc scope :!implied-gicrs nil))))]
-      (.put !aggs agg-sym
-            (if (:column? (meta expr))
-              {:agg-expr (list set-fn expr)}
-
-              (let [in-sym (-> (->col-sym (str "_" set-fn "_in_" (swap! !id-count inc)))
-                               (vary-meta assoc :agg-in-sym? true))]
-                {:agg-expr (list set-fn in-sym)
-                 :in-projection (->ProjectedCol {in-sym expr} in-sym)})))
-
-      agg-sym))
+                   (.accept (assoc this :!aggs nil, :scope (assoc scope :!implied-gicrs nil))))
+          agg-entry (if (:column? (meta expr))
+                      {:agg-expr (list set-fn expr)}
+                      (let [in-sym (-> (->col-sym (str "_" set-fn "_in_" (swap! !id-count inc)))
+                                       (vary-meta assoc :agg-in-sym? true))]
+                        {:agg-expr (list set-fn in-sym)
+                         :in-projection (->ProjectedCol {in-sym expr} in-sym)}))]
+      (or (outer-agg-sym env (:outer-sq-refs env) agg-sym agg-entry expr)
+          (do (.put !aggs agg-sym agg-entry)
+              agg-sym))))
 
   (visitOrderedSetFunction [{{:keys [!id-count]} :env, :keys [^Map !aggs], :as this} ctx]
     (let [set-fn (symbol (str/lower-case (.getText (.orderedSetFunctionType ctx))))
@@ -1977,11 +2004,11 @@
                              (vary-meta assoc :agg-in-sym? true))]
               [in-sym {in-sym sort-expr}]))]
 
-      (.put !aggs agg-sym
-            (cond-> {:agg-expr (list set-fn fraction-expr [sort-sym sort-opts])}
-              sort-in (assoc :in-projection (->ProjectedCol sort-in (first (keys sort-in))))))
-
-      agg-sym))
+      (let [agg-entry (cond-> {:agg-expr (list set-fn fraction-expr [sort-sym sort-opts])}
+                        sort-in (assoc :in-projection (->ProjectedCol sort-in (first (keys sort-in)))))]
+        (or (outer-agg-sym env (:outer-sq-refs env) agg-sym agg-entry sort-expr)
+            (do (.put !aggs agg-sym agg-entry)
+                agg-sym)))))
 
   (visitWindowFunctionExpr [{:keys [^Map !windows] :as this} ctx]
     (if-not !windows
@@ -2047,25 +2074,25 @@
   (visitWindowFrameClause [_this _ctx]
     (throw (UnsupportedOperationException. "TODO: Window frames currently not supported!")))
 
-  (visitScalarSubqueryExpr [{:keys [!subqs]} ctx]
+  (visitScalarSubqueryExpr [{:keys [!subqs !aggs]} ctx]
     (plan-sq (.subquery ctx) env scope !subqs
-             {:sq-type :scalar, :assert-single-col? true}))
+             {:sq-type :scalar, :assert-single-col? true, :outer-aggs !aggs}))
 
-  (visitNestOneSubqueryExpr [{:keys [!subqs]} ctx]
+  (visitNestOneSubqueryExpr [{:keys [!subqs !aggs]} ctx]
     (plan-sq (.subquery ctx) env scope !subqs
-             {:sq-type :nest-one}))
+             {:sq-type :nest-one, :outer-aggs !aggs}))
 
-  (visitNestManySubqueryExpr [{:keys [!subqs]} ctx]
+  (visitNestManySubqueryExpr [{:keys [!subqs !aggs]} ctx]
     (plan-sq (.subquery ctx) env scope !subqs
-             {:sq-type :nest-many}))
+             {:sq-type :nest-many, :outer-aggs !aggs}))
 
-  (visitArrayValueConstructorByQuery [{:keys [!subqs]} ctx]
+  (visitArrayValueConstructorByQuery [{:keys [!subqs !aggs]} ctx]
     (plan-sq (.subquery ctx) env scope !subqs
-             {:sq-type :array-by-query, :assert-single-col? true}))
+             {:sq-type :array-by-query, :assert-single-col? true, :outer-aggs !aggs}))
 
-  (visitExistsPredicate [{:keys [!subqs]} ctx]
+  (visitExistsPredicate [{:keys [!subqs !aggs]} ctx]
     (plan-sq (.subquery ctx) env scope !subqs
-             {:sq-type :exists}))
+             {:sq-type :exists, :outer-aggs !aggs}))
 
   (visitQuantifiedComparisonPredicate [this ctx]
     (let [quantifier (case (str/lower-case (.getText (.quantifier ctx)))
@@ -2089,9 +2116,9 @@
                                           (= quantifier :all) negate-op)
                                     :quantifier quantifier}))))
 
-  (visitQuantifiedComparisonSubquery [{:keys [!subqs qc-pt2]} ctx]
+  (visitQuantifiedComparisonSubquery [{:keys [!subqs !aggs qc-pt2]} ctx]
     (cond->> (plan-sq (.subquery ctx) env scope !subqs
-                      (into {:sq-type :quantified-comparison, :assert-single-col? true}
+                      (into {:sq-type :quantified-comparison, :assert-single-col? true, :outer-aggs !aggs}
                             qc-pt2))
       (= :all (:quantifier qc-pt2)) (list 'not)))
 
@@ -2114,7 +2141,7 @@
       (cond-> sq-sym
         (= :all (:quantifier qc-pt2)) (-> (list 'not)))))
 
-  (visitInPredicate [{:keys [!subqs] :as this} ctx]
+  (visitInPredicate [{:keys [!subqs !aggs] :as this} ctx]
     (let [^ParserRuleContext
           sq-ctx (.accept (.inPredicateValue ctx)
                           (reify SqlVisitor
@@ -2125,10 +2152,11 @@
                         {:sq-type :quantified-comparison
                          :assert-single-col? true
                          :expr (.accept (.expr ctx) this)
-                         :op '==})
+                         :op '==
+                         :outer-aggs !aggs})
         (boolean (.NOT ctx)) (list 'not))))
 
-  (visitInPredicatePart2 [{:keys [pt1 !subqs]} ctx]
+  (visitInPredicatePart2 [{:keys [pt1 !subqs !aggs]} ctx]
     (let [^ParserRuleContext
           sq-ctx (.accept (.inPredicateValue ctx)
                           (reify SqlVisitor
@@ -2139,7 +2167,8 @@
                         {:sq-type :quantified-comparison
                          :assert-single-col? true
                          :expr pt1
-                         :op '==})
+                         :op '==
+                         :outer-aggs !aggs})
         (boolean (.NOT ctx)) (list 'not))))
 
   (visitFetchFirstRowCount [this ctx]

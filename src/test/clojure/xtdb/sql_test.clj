@@ -3228,3 +3228,81 @@ UNION ALL
 
   (t/is (= [{:x "a", :xt/id 1} {:x "b", :xt/id 2} {:x "d", :xt/id 4}]
            (xt/q tu/*node* "SELECT _id, x FROM foo WHERE _id = 1 OR _id = 4 OR _id = 2 ORDER BY _id"))))
+
+(t/deftest test-outer-aggs-in-subqueries
+  ;; tab0: group col0=10 has 2 rows, group col0=20 has 1 row
+  ;; AVG(col0): 10→10, 20→20. SUM(col0): 10→20, 20→20. COUNT(*): 10→2, 20→1.
+  (xt/submit-tx tu/*node* [[:put-docs :tab0
+                            {:xt/id 1 :col0 10}
+                            {:xt/id 2 :col0 20}
+                            {:xt/id 3 :col0 10}]])
+
+  (t/testing "IN value-list"
+    (t/testing "NULL IN (agg) — always empty because NULL never equals anything"
+      (t/is (= []
+               (xt/q tu/*node*
+                     "SELECT col0 FROM tab0 GROUP BY col0 HAVING (NULL) IN (AVG(+ - col0))"))))
+
+    (t/testing "col0 IN (SUM(col0)) — group col0=20: SUM=20, 20 IN (20) → true"
+      (t/is (= [{:col0 20}]
+               (xt/q tu/*node*
+                     "SELECT col0 FROM tab0 GROUP BY col0 HAVING col0 IN (SUM(col0))"))))
+
+    (t/testing "col0 IN (AVG(col0), SUM(col0)) — both groups match via AVG or SUM"
+      (t/is (= [{:col0 10} {:col0 20}]
+               (->> (xt/q tu/*node*
+                          "SELECT col0 FROM tab0 GROUP BY col0 HAVING col0 IN (AVG(col0), SUM(col0))")
+                    (sort-by :col0)))))
+
+    (t/testing "COUNT(*) in IN value-list"
+      ;; group col0=10: COUNT(*)=2, 10≠2. group col0=20: COUNT(*)=1, 20≠1. Neither matches.
+      (t/is (= []
+               (xt/q tu/*node*
+                     "SELECT col0 FROM tab0 GROUP BY col0 HAVING col0 IN (COUNT(*))")))
+
+      ;; with data where COUNT(*) matches col0
+      (xt/submit-tx tu/*node* [[:put-docs :tab1
+                                {:xt/id 1 :col0 1}
+                                {:xt/id 2 :col0 2}
+                                {:xt/id 3 :col0 2}]])
+      (t/is (= [{:col0 1} {:col0 2}]
+               (->> (xt/q tu/*node*
+                          "SELECT col0 FROM tab1 GROUP BY col0 HAVING col0 IN (COUNT(*))")
+                    (sort-by :col0))))))
+
+  (t/testing "EXISTS subquery — AVG(col0) > 0 is true for both groups"
+    (t/is (= [{:col0 10} {:col0 20}]
+             (->> (xt/q tu/*node*
+                        "SELECT col0 FROM tab0 GROUP BY col0 HAVING EXISTS (SELECT 1 WHERE AVG(col0) > 0)")
+                  (sort-by :col0)))))
+
+  (t/testing "NOT EXISTS subquery — AVG(col0) > 100 is false for both groups"
+    (t/is (= [{:col0 10} {:col0 20}]
+             (->> (xt/q tu/*node*
+                        "SELECT col0 FROM tab0 GROUP BY col0 HAVING NOT EXISTS (SELECT 1 WHERE AVG(col0) > 100)")
+                  (sort-by :col0)))))
+
+  (t/testing "scalar subquery — SUM(col0) per group: 10→20, 20→20. Only col0=20 matches."
+    (t/is (= [{:col0 20}]
+             (xt/q tu/*node*
+                   "SELECT col0 FROM tab0 GROUP BY col0 HAVING col0 = (SELECT SUM(col0))"))))
+
+  (t/testing "quantified comparison — col0 < ALL (SELECT SUM(col0))"
+    ;; SUM(col0): 10→20, 20→20. So col0 < 20 only for group col0=10.
+    (t/is (= [{:col0 10}]
+             (xt/q tu/*node*
+                   "SELECT col0 FROM tab0 GROUP BY col0 HAVING col0 < ALL (SELECT SUM(col0))"))))
+
+  (t/testing "scalar subquery with outer agg in SELECT"
+    ;; SUM(col0) per group: 10→20, 20→20.
+    (t/is (= [{:col0 10 :total 20} {:col0 20 :total 20}]
+             (->> (xt/q tu/*node*
+                        "SELECT col0, (SELECT SUM(col0)) as total FROM tab0 GROUP BY col0")
+                  (sort-by :col0)))))
+
+  (t/testing "EXISTS with outer agg in SELECT"
+    ;; AVG(col0) > 15 is false for group 10 (avg=10), true for group 20 (avg=20)
+    (t/is (= [{:col0 10 :has-high-avg false} {:col0 20 :has-high-avg true}]
+             (->> (xt/q tu/*node*
+                        "SELECT col0, EXISTS (SELECT 1 WHERE AVG(col0) > 15) as has_high_avg FROM tab0 GROUP BY col0")
+                  (sort-by :col0))))))
