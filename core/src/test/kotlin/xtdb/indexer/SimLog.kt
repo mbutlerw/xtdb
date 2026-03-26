@@ -23,8 +23,8 @@ internal class SimLog<M>(private val name: String, ctx: CoroutineContext, privat
     /**
      * A consumer that participates in leader election (Kafka consumer group semantics).
      */
-    class GroupConsumer<M>(val listener: Log.SubscriptionListener) {
-        var proc: Log.RecordProcessor<M>? = null
+    class GroupConsumer<M>(val listener: Log.SubscriptionListener<M>) {
+        var tailSpec: Log.TailSpec<M>? = null
         var nextOffset = 0
     }
 
@@ -57,9 +57,9 @@ internal class SimLog<M>(private val name: String, ctx: CoroutineContext, privat
             yield()
 
             this.leader?.let { leader ->
-                val leaderProc = leader.proc
+                val tailSpec = leader.tailSpec
                     ?: run {
-                        LOG.debug("$name/processMessages: leader has no processor, skipping")
+                        LOG.debug("$name/processMessages: leader has no tail spec, skipping")
                         return@let
                     }
 
@@ -69,7 +69,7 @@ internal class SimLog<M>(private val name: String, ctx: CoroutineContext, privat
                 if (lag > 0) {
                     val messageCount = rand.nextInt(1, lag + 1)
                     LOG.debug("$name/processMessages: delivering $messageCount group record(s) [$nextOffset..${nextOffset + messageCount - 1}] (lag=$lag)")
-                    leaderProc.processRecords(topic.subList(nextOffset, nextOffset + messageCount))
+                    tailSpec.processor.processRecords(topic.subList(nextOffset, nextOffset + messageCount))
                     leader.nextOffset += messageCount
                 }
 
@@ -117,13 +117,19 @@ internal class SimLog<M>(private val name: String, ctx: CoroutineContext, privat
             leader?.let { old ->
                 LOG.debug("$name/chooseLeader: revoking old leader")
                 old.listener.onPartitionsRevoked(listOf(0))
+                old.tailSpec = null
                 leader = null
             }
 
             if (groupConsumers.isNotEmpty()) {
                 val newLeader = groupConsumers.random(rand)
                 LOG.debug("$name/chooseLeader: assigning new leader")
-                newLeader.listener.onPartitionsAssigned(listOf(0))
+                val tailSpec = newLeader.listener.onPartitionsAssigned(listOf(0))
+                newLeader.tailSpec = tailSpec
+                if (tailSpec != null) {
+                    val startOffset = (MsgIdUtil.afterMsgIdToOffset(epoch, tailSpec.afterMsgId) + 1).toInt()
+                    newLeader.nextOffset = startOffset
+                }
                 leader = newLeader
                 wakeLeader.send(Unit)
             } else {
@@ -149,9 +155,8 @@ internal class SimLog<M>(private val name: String, ctx: CoroutineContext, privat
         return Log.MessageMetadata(epoch, offset, ts)
     }
 
-    override fun appendMessage(message: M): Deferred<Log.MessageMetadata> = scope.async {
+    override suspend fun appendMessage(message: M): Log.MessageMetadata =
         appendSync(message)
-    }
 
     override fun openAtomicProducer(transactionalId: String) = object : Log.AtomicProducer<M> {
         override fun openTx() = object : Log.AtomicProducer.Tx<M> {
@@ -190,29 +195,25 @@ internal class SimLog<M>(private val name: String, ctx: CoroutineContext, privat
 
     override fun readLastMessage(): M? = topic.lastOrNull()?.message
 
-    override fun openConsumer(): Log.Consumer<M> = object : Log.Consumer<M> {
-        override fun tailAll(afterMsgId: MessageId, processor: Log.RecordProcessor<M>): Log.Subscription {
-            val startOffset = (MsgIdUtil.afterMsgIdToOffset(epoch, afterMsgId) + 1).toInt()
-            LOG.debug("$name/openConsumer/tailAll: startOffset=$startOffset topicSize=${topic.size}")
-            val consumer = PlainConsumer(processor, startOffset)
-            plainConsumers += consumer
+    override fun tailAll(afterMsgId: MessageId, processor: Log.RecordProcessor<M>): Log.Subscription {
+        val startOffset = (MsgIdUtil.afterMsgIdToOffset(epoch, afterMsgId) + 1).toInt()
+        LOG.debug("$name/tailAll: startOffset=$startOffset topicSize=${topic.size}")
+        val consumer = PlainConsumer(processor, startOffset)
+        plainConsumers += consumer
 
-            if (consumer.nextOffset < topic.size)
-                wakePlainConsumers.trySend(Unit)
+        if (consumer.nextOffset < topic.size)
+            wakePlainConsumers.trySend(Unit)
 
-            return Log.Subscription {
-                LOG.debug("$name/openConsumer/tailAll: closing plain subscription")
-                consumer.active = false
-                plainConsumers -= consumer
-            }
+        return Log.Subscription {
+            LOG.debug("$name/tailAll: closing plain subscription")
+            consumer.active = false
+            plainConsumers -= consumer
         }
-
-        override fun close() {}
     }
 
-    private fun newGroupConsumer(listener: Log.SubscriptionListener): GroupConsumer<M> {
+    private fun newGroupConsumer(listener: Log.SubscriptionListener<M>): GroupConsumer<M> {
         LOG.debug("$name: new group consumer joining (total will be ${groupConsumers.size + 1})")
-        return GroupConsumer<M>(listener).also {
+        return GroupConsumer(listener).also {
             groupConsumers += it
             rebalanceTrigger.trySend(Unit)
         }
@@ -224,28 +225,13 @@ internal class SimLog<M>(private val name: String, ctx: CoroutineContext, privat
         rebalanceTrigger.trySend(Unit)
     }
 
-    override fun openGroupConsumer(listener: Log.SubscriptionListener): Log.Consumer<M> =
-        object : Log.Consumer<M> {
-            private val consumer = newGroupConsumer(listener)
-
-            override fun tailAll(
-                afterMsgId: MessageId,
-                processor: Log.RecordProcessor<M>
-            ): Log.Subscription {
-                LOG.debug("$name/groupConsumer/tailAll: setting processor, unpausing")
-                consumer.proc = processor
-
-                return Log.Subscription {
-                    LOG.debug("$name/groupConsumer/tailAll: clearing processor, pausing")
-                    consumer.proc = null
-                }
-            }
-
-            override fun close() {
-                LOG.debug("$name/groupConsumer: closing")
-                groupConsumerClosed(consumer)
-            }
+    override fun openGroupSubscription(listener: Log.SubscriptionListener<M>): Log.Subscription {
+        val consumer = newGroupConsumer(listener)
+        return Log.Subscription {
+            LOG.debug("$name/groupSubscription: closing")
+            groupConsumerClosed(consumer)
         }
+    }
 
     override fun close() {
         LOG.debug("$name: closing")
