@@ -10,6 +10,7 @@ import xtdb.compactor.SegmentMerge.Results
 import xtdb.time.microsAsInstant
 import xtdb.trie.Trie
 import xtdb.util.closeAll
+import xtdb.util.closeOnCatch
 import xtdb.util.openWritableChannel
 import java.nio.file.Path
 import java.time.DayOfWeek
@@ -80,6 +81,9 @@ internal interface OutWriter : AutoCloseable {
 
         private val tempDir = createTempDirectory("compactor")
 
+        internal fun newOutPath(): Path = createTempFile(tempDir, "merged-segments", ".arrow")
+        internal fun newOutDir(): Path = createTempDirectory(tempDir, "merged-segments")
+
         private class CopierFactory(private val dataRel: Relation) {
             fun rowCopier(dataReader: RelationReader) = object : RecencyRowCopier {
                 private val copier = dataReader.rowCopier(dataRel)
@@ -90,14 +94,19 @@ internal interface OutWriter : AutoCloseable {
 
         internal inner class OutRel(
             schema: Schema,
-            private val outPath: Path = createTempFile(tempDir, "merged-segments", ".arrow"),
+            private val outPath: Path,
             val recency: LocalDate?
         ) : OutWriter {
             private val outRel = Relation(al, schema)
 
-            private val unloader = runCatching { outRel.startUnload(outPath.openWritableChannel()) }
-                .onFailure { outRel.close() }
-                .getOrThrow()
+            // closeOnCatch on outRel + on the channel covers both the openWritableChannel and
+            // startUnload throws — the channel was previously stranded if startUnload raised
+            // after taking it, since runCatching only closed outRel.
+            private val unloader = outRel.closeOnCatch { rel ->
+                outPath.openWritableChannel().closeOnCatch { ch ->
+                    rel.startUnload(ch)
+                }
+            }
 
             private val copierFactory = CopierFactory(outRel)
 
@@ -128,8 +137,11 @@ internal interface OutWriter : AutoCloseable {
             }
         }
 
-        internal inner class PartitionedOutWriter(private val schema: Schema, private val recencyPartition: RecencyPartition?) : OutWriter {
-            private val outDir = createTempDirectory(tempDir, "merged-segments")
+        internal inner class PartitionedOutWriter(
+            private val schema: Schema,
+            private val recencyPartition: RecencyPartition?,
+            private val outDir: Path,
+        ) : OutWriter {
             private var currentRel = OutRel(schema, outDir.resolve("rc.arrow"), null)
 
             private val historicalRels = mutableMapOf<LocalDate, OutRel>()

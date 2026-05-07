@@ -8,8 +8,10 @@ import java.nio.file.StandardOpenOption.*
 import kotlin.contracts.ExperimentalContracts
 import kotlin.contracts.InvocationKind.EXACTLY_ONCE
 import kotlin.contracts.contract
+import kotlin.io.path.ExperimentalPathApi
 import kotlin.io.path.createTempFile
 import kotlin.io.path.deleteIfExists
+import kotlin.io.path.deleteRecursively
 
 internal fun Path.openReadableChannel(): FileChannel = FileChannel.open(this, READ)
 internal fun Path.openWritableChannel(): WritableByteChannel = Files.newByteChannel(this, WRITE, CREATE)
@@ -62,6 +64,15 @@ inline fun <R> Path.deleteOnCatch(block: (Path) -> R): R =
         block(this)
     } catch (e: Throwable) {
         deleteIfExists()
+        throw e
+    }
+
+@OptIn(ExperimentalPathApi::class)
+inline fun <R> Path.deleteRecursivelyOnCatch(block: (Path) -> R): R =
+    try {
+        block(this)
+    } catch (e: Throwable) {
+        deleteRecursively()
         throw e
     }
 

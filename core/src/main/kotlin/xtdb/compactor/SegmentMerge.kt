@@ -216,19 +216,30 @@ internal class SegmentMerge(private val al: BufferAllocator) : AutoCloseable {
 
         val schema = dataRelSchema(mergedPutField.withName("put"))
 
-        val outWriter = when (recencyPartitioning) {
-            RecencyPartitioning.Partition -> outWriters.PartitionedOutWriter(schema, recencyPartition)
-            is RecencyPartitioning.Preserve -> outWriters.OutRel(schema, recency = recencyPartitioning.recency)
-        }
+        suspend fun runMerge(outWriter: OutWriter): Results =
+            outWriter.use {
+                for (task in MergePlanner.plan(segments, pathFilter?.toPathPredicate())) {
+                    if (Thread.interrupted()) throw InterruptedException()
 
-        return outWriter.use {
-            for (task in MergePlanner.plan(segments, pathFilter?.toPathPredicate())) {
-                if (Thread.interrupted()) throw InterruptedException()
+                    task.merge(it, pathFilter)
+                }
 
-                task.merge(it, pathFilter)
+                it.end()
             }
 
-            it.end()
+        // Path creation lives at the call site so the cleanup-on-throw is one wrapper.
+        // On success the deleteOn{Catch,RecursivelyOnCatch} pass through and Results
+        // owns the path until its close().
+        return when (recencyPartitioning) {
+            RecencyPartitioning.Partition ->
+                outWriters.newOutDir().deleteRecursivelyOnCatch { outDir ->
+                    runMerge(outWriters.PartitionedOutWriter(schema, recencyPartition, outDir))
+                }
+
+            is RecencyPartitioning.Preserve ->
+                outWriters.newOutPath().deleteOnCatch { outPath ->
+                    runMerge(outWriters.OutRel(schema, outPath, recencyPartitioning.recency))
+                }
         }
     }
 

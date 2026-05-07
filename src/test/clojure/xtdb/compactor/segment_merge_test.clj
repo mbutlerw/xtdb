@@ -5,6 +5,7 @@
             [xtdb.time :as time]
             [xtdb.util :as util])
   (:import [java.nio ByteBuffer]
+           (java.nio.file Files Path)
            (xtdb.compactor SegmentMerge SegmentMerge$RecencyPartitioning$Partition SegmentMerge$RecencyPartitioning$Preserve SegmentMerge$Result)
            [xtdb.segment MemorySegment]))
 
@@ -138,3 +139,49 @@
                                (->> (.getAsMaps rel)
                                     (mapv #(update % :xt/iid (comp util/byte-buffer->uuid ByteBuffer/wrap)))))])
                           (into {}))))))))))
+
+(defn- list-children [^Path dir]
+  (when (Files/isDirectory dir (into-array java.nio.file.LinkOption []))
+    (with-open [s (Files/list dir)]
+      (vec (.toList s)))))
+
+(defn- compactor-tmp-dirs []
+  (let [tmp-root (-> (System/getProperty "java.io.tmpdir") util/->path)]
+    (->> (list-children tmp-root)
+         (filter #(.startsWith (str (.getFileName ^Path %)) "compactor"))
+         (into #{}))))
+
+(t/deftest test-merge-segments-cleans-up-on-mid-merge-throw
+  ;; Bug: when mergeSegments throws mid-merge (here, via a pre-set thread interrupt
+  ;; that fires the Thread.interrupted() check), the OutWriter is closed — releasing
+  ;; the unloader and Relation — but the underlying temp file/dir is left behind in
+  ;; tempDir.  In partitioned mode we leak the merged-segments-{random}/ directory
+  ;; with whatever was written before the throw; in preserve mode, the .arrow file.
+  (let [baseline (compactor-tmp-dirs)]
+    (with-open [seg-merge (SegmentMerge. tu/*allocator*)]
+      (util/with-open [lt (tu/open-live-table #xt/table foo)]
+        (tu/index-tx! lt #xt/tx-key {:tx-id 0, :system-time #xt/instant "2020-01-01T00:00:00Z"}
+                      [{:xt/id "foo", :v 0}])
+
+        (let [segments [(MemorySegment. (.compactLogs (.getLiveTrie lt))
+                                        (.getLiveRelation lt))]]
+
+          (.interrupt (Thread/currentThread))
+          (try
+            (.mergeSegmentsSync seg-merge segments nil
+                                SegmentMerge$RecencyPartitioning$Partition/INSTANCE)
+            (catch InterruptedException _)
+            (catch Exception _))
+
+          ;; clear residual interrupt state
+          (Thread/interrupted)
+
+          (let [our-tmp-dirs (->> (compactor-tmp-dirs)
+                                  (remove baseline))
+                leftovers (mapcat (fn [^Path d]
+                                    (->> (list-children d)
+                                         (filter #(.startsWith (str (.getFileName ^Path %)) "merged-segments"))))
+                                  our-tmp-dirs)]
+            (t/is (empty? leftovers)
+                  (str "mid-merge throw should not strand temp paths under "
+                       our-tmp-dirs "; found: " leftovers))))))))
