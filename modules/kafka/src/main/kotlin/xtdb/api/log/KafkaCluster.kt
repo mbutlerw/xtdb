@@ -153,18 +153,12 @@ class KafkaCluster(
         class Unregister(val topic: String, val cont: CancellableContinuation<Unit>) : GroupCommand
     }
 
-    private class ListenerAssignmentFailures(val byTopic: Map<String, Throwable>) :
-        RuntimeException(
-            byTopic.entries.joinToString(", ") { (topic, e) ->
-                "$topic (${e.javaClass.simpleName}: ${e.message})"
-            },
-            byTopic.values.firstOrNull(),
-        )
-
     @Suppress("UNCHECKED_CAST")
     private inner class SharedGroupConsumer : AutoCloseable {
         private val subscriptions = mutableMapOf<String, TopicSubscription<*>>()
         private val commandCh = Channel<GroupCommand>(Channel.UNLIMITED)
+
+        private var pendingEvictions: Map<String, Throwable>? = null
 
         private val consumer: KafkaConsumer<Unit, ByteArray> =
             kafkaConfigMap.plus(mapOf("group.id" to groupId)).openConsumer()
@@ -228,7 +222,10 @@ class KafkaCluster(
                                 }
                             }
                         }
-                        if (failures.isNotEmpty()) throw ListenerAssignmentFailures(failures)
+                        if (failures.isNotEmpty()) {
+                            pendingEvictions = failures
+                            throw RuntimeException("rebalance listener failed for topics: ${failures.keys}")
+                        }
                     }
 
                 override fun onPartitionsRevoked(partitions: Collection<TopicPartition>) =
@@ -339,13 +336,12 @@ class KafkaCluster(
                                     LOG.error(e) { "evicting subscriptions for OffsetOutOfRange partitions: ${e.partitions()}" }
                                     evictSubscriptions(e.partitions().map { it.topic() }.toSet(), e)
                                 } catch (e: KafkaException) {
-                                    val failures = generateSequence<Throwable>(e) { it.cause }
-                                        .filterIsInstance<ListenerAssignmentFailures>()
-                                        .firstOrNull() ?: throw e
-                                    failures.byTopic.forEach { (topic, cause) ->
+                                    val failures = pendingEvictions ?: throw e
+                                    pendingEvictions = null
+                                    failures.forEach { (topic, cause) ->
                                         LOG.error(cause) { "evicting topic '$topic' after listener failure on assignment" }
                                     }
-                                    evictSubscriptions(failures.byTopic)
+                                    evictSubscriptions(failures)
                                 }
                             }
                         }
