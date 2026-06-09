@@ -205,12 +205,11 @@
     (->> (.getDatabaseNames db-cat)
          (into {} (map (fn [^String db-name]
                          (let [^Database db (.databaseOrNull db-cat db-name)
-                               ;; TODO (#5557 unit 5) source log gains a per-partition
-                               ;; `latestSubmittedMsgId` once `Log<M>` is widened; until then it's
-                               ;; database-level and multi-partition is gated, so the same value
-                               ;; appears in every slot.
-                               latest (-> db .getSourceLog .getLatestSubmittedMsgId)]
-                           [db-name (vec (repeat (count (.getPartitions db)) latest))]))))))
+                               source-log (.getSourceLog db)]
+                           [db-name (->> (.getPartitions db)
+                                         (sort-by key)
+                                         (mapv (fn [[^Integer part-idx _]]
+                                                 (.latestSubmittedMsgId source-log part-idx))))]))))))
 
   (latest-processed-msg-ids [_]
     (->> (.getDatabaseNames db-cat)

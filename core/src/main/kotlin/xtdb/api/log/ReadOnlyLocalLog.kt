@@ -33,12 +33,22 @@ class ReadOnlyLocalLog<M>(
     private val rootPath: Path,
     private val codec: MessageCodec<M>,
     override val epoch: Int,
+    val partitions: Int = 1,
     coroutineContext: CoroutineContext = Dispatchers.Default,
-    private val logFileName: String = "LOG"
+    private val baseFileName: String = "LOG"
 ) : Log<M> {
 
+    init {
+        require(partitions >= 1) { "partitions must be >= 1" }
+    }
+
     private val scope = CoroutineScope(coroutineContext)
-    private val logFilePath = rootPath.resolve(logFileName)
+
+    // Single-partition keeps the existing LOG filename for back-compat; multi-partition splits to LOG-0, LOG-1, …
+    private fun partitionFileName(partition: Int) =
+        if (partitions == 1) baseFileName else "$baseFileName-$partition"
+
+    private fun partitionFilePath(partition: Int) = rootPath.resolve(partitionFileName(partition))
 
     companion object {
         private fun messageSizeBytes(size: Int) = 1 + INT_BYTES + LONG_BYTES + size + LONG_BYTES
@@ -91,29 +101,33 @@ class ReadOnlyLocalLog<M>(
             .also { position(pos + messageSizeBytes(size)) }
     }
 
-    override val latestSubmittedOffset: LogOffset
-        get() = readLatestSubmittedOffset(logFilePath)
+    override fun latestSubmittedOffset(partition: Int): LogOffset =
+        readLatestSubmittedOffset(partitionFilePath(partition))
 
-    override suspend fun appendMessage(message: M): MessageMetadata =
+    override suspend fun appendMessage(message: M, partition: Int): MessageMetadata =
         throw Incorrect("Cannot append to read-only database log")
 
-    override fun openAtomicProducer(transactionalId: String) =
+    override fun openAtomicProducer(transactionalId: String, partition: Int) =
         throw Incorrect("Cannot open atomic producer on read-only database log")
 
-    override fun readLastMessage(): M? {
-        if (latestSubmittedOffset < 0) return null
+    override fun readLastMessage(partition: Int): M? {
+        val logFilePath = partitionFilePath(partition)
+        val offset = readLatestSubmittedOffset(logFilePath)
+        if (offset < 0) return null
 
         return FileChannel.open(logFilePath, READ).use { ch ->
-            ch.position(latestSubmittedOffset)
+            ch.position(offset)
             ch.readMessage()?.message
         }
     }
 
-    override fun readRecords(fromMsgId: MessageId, toMsgId: MessageId) = sequence {
+    override fun readRecords(partition: Int, fromMsgId: MessageId, toMsgId: MessageId) = sequence {
         if (MsgIdUtil.msgIdToEpoch(fromMsgId) != epoch || MsgIdUtil.msgIdToEpoch(toMsgId) != epoch) return@sequence
+        val logFilePath = partitionFilePath(partition)
         val fromOffset = msgIdToOffset(fromMsgId)
         val toOffset = msgIdToOffset(toMsgId)
-        if (fromOffset > latestSubmittedOffset || fromOffset >= toOffset) return@sequence
+        val latestOffset = readLatestSubmittedOffset(logFilePath)
+        if (fromOffset > latestOffset || fromOffset >= toOffset) return@sequence
 
         FileChannel.open(logFilePath, READ).use { ch ->
             ch.position(fromOffset)
@@ -125,7 +139,9 @@ class ReadOnlyLocalLog<M>(
         }
     }
 
-    override suspend fun tailAll(afterMsgId: MessageId, processor: Log.RecordProcessor<M>) = coroutineScope {
+    override suspend fun tailAll(partition: Int, afterMsgId: MessageId, processor: Log.RecordProcessor<M>) = coroutineScope {
+        val logFileName = partitionFileName(partition)
+        val logFilePath = partitionFilePath(partition)
         val ch = Channel<Log.Record<M>>(100)
 
         launch {
@@ -135,7 +151,7 @@ class ReadOnlyLocalLog<M>(
                 rootPath.register(watchService, ENTRY_MODIFY)
 
                 try {
-                    readNewMessages(currentOffset, ch)?.let { currentOffset = it }
+                    readNewMessages(logFilePath, currentOffset, ch)?.let { currentOffset = it }
 
                     while (true) {
                         val key: WatchKey = runInterruptible(Dispatchers.IO) { watchService.take() }
@@ -149,7 +165,7 @@ class ReadOnlyLocalLog<M>(
                         }
 
                         if (logModified) {
-                            readNewMessages(currentOffset, ch)?.let { currentOffset = it }
+                            readNewMessages(logFilePath, currentOffset, ch)?.let { currentOffset = it }
                         }
 
                         if (!key.reset()) {
@@ -172,18 +188,23 @@ class ReadOnlyLocalLog<M>(
         }
     }
 
-    override suspend fun openGroupSubscription(listener: Log.SubscriptionListener<M>) {
-        val spec = listener.onPartitionsAssigned(listOf(0))
-        if (spec != null) {
-            try {
-                tailAll(spec.afterMsgId, spec.processor)
-            } finally {
-                listener.onPartitionsRevoked(listOf(0))
+    override suspend fun openGroupSubscription(listener: Log.SubscriptionListener<M>) = coroutineScope {
+        val assigned = mutableListOf<Int>()
+        try {
+            for (p in 0 until partitions) {
+                val spec = listener.onPartitionAssigned(p) ?: continue
+                assigned += p
+                launch { tailAll(p, spec.afterMsgId, spec.processor) }
+            }
+            awaitCancellation()
+        } finally {
+            withContext(NonCancellable) {
+                for (p in assigned) listener.onPartitionRevoked(p)
             }
         }
     }
 
-    private suspend fun readNewMessages(currentOffset: LogOffset, ch: Channel<Log.Record<M>>): LogOffset? {
+    private suspend fun readNewMessages(logFilePath: Path, currentOffset: LogOffset, ch: Channel<Log.Record<M>>): LogOffset? {
         val newLatestOffset = readLatestSubmittedOffset(logFilePath)
 
         if (newLatestOffset <= currentOffset) return null

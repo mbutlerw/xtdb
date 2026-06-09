@@ -125,18 +125,18 @@ class LogProcessor(
         }
     }
 
-    override suspend fun onPartitionsAssigned(partitions: Collection<Int>): Log.TailSpec<SourceMessage>? {
+    override suspend fun onPartitionAssigned(partition: Int): Log.TailSpec<SourceMessage>? {
         return when (val oldSys = sys) {
             is LeaderSystem -> {
-                LOG.info("[$dbName] partitions assigned: $partitions — already leader, no transition needed")
+                LOG.info("[$dbName] partition assigned: $partition — already leader, no transition needed")
                 null
             }
 
             is FollowerSystem -> {
-                LOG.info("[$dbName] partitions assigned: $partitions — transitioning to leader")
+                LOG.info("[$dbName] partition assigned: $partition — transitioning to leader")
 
                 try {
-                    replicaLog.openAtomicProducer("${dbState.name}-leader").closeOnCatch { replicaProducer ->
+                    replicaLog.openAtomicProducer("${dbState.name}-leader", partition).closeOnCatch { replicaProducer ->
                         val followerProc = oldSys.proc
 
                         // Send a NoOp to get a known msgId we can await —
@@ -186,10 +186,10 @@ class LogProcessor(
         }
     }
 
-    override suspend fun onPartitionsRevoked(partitions: Collection<Int>) {
+    override suspend fun onPartitionRevoked(partition: Int) {
         when (val oldSys = sys) {
             is LeaderSystem -> {
-                LOG.info("[$dbName] partitions revoked: $partitions — was leader, transitioning to follower")
+                LOG.info("[$dbName] partition revoked: $partition — was leader, transitioning to follower")
                 // Cancel first: Kafka guarantees no concurrent processing during rebalance. The
                 // leader's watermark fields stay readable after the cancel/close — they're not
                 // allocator-backed — so we free the old term before reading them to seed the follower.
@@ -200,7 +200,7 @@ class LogProcessor(
             }
 
             is FollowerSystem -> {
-                LOG.debug("[$dbName] partitions revoked: $partitions — already follower, no transition needed")
+                LOG.debug("[$dbName] partition revoked: $partition — already follower, no transition needed")
             }
         }
     }

@@ -50,14 +50,15 @@ class DatabaseStorage(
 
             val metadataManager = open { PageMetadata.factory(allocator, bufferPool) }
 
+            val partitions = dbConfig.partitions
             val sourceLog = open {
-                if (readOnly) dbConfig.log.openReadOnlySourceLog(remotes)
-                else dbConfig.log.openSourceLog(remotes)
+                if (readOnly) dbConfig.log.openReadOnlySourceLog(remotes, partitions)
+                else dbConfig.log.openSourceLog(remotes, partitions)
             }
 
             val replicaLog = open {
-                if (readOnly) dbConfig.log.openReadOnlyReplicaLog(remotes)
-                else dbConfig.log.openReplicaLog(remotes)
+                if (readOnly) dbConfig.log.openReadOnlyReplicaLog(remotes, partitions)
+                else dbConfig.log.openReplicaLog(remotes, partitions)
             }
 
             DatabaseStorage(sourceLog, replicaLog, bufferPool, metadataManager)
