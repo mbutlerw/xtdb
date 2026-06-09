@@ -162,6 +162,8 @@ class Database(
         return Xtdb.SubmittedTx(meta.msgId)
     }
 
+    // Submitted-write control messages land on partition 0 — only single-partition databases
+    // accept submitted writes (#5557 Q3f); external-source databases route through their source.
     fun sendFlushBlockMessage(): Log.MessageMetadata = runBlocking {
         sourceLog.appendMessage(SourceMessage.FlushBlock(blockCatalog.currentBlockIndex ?: -1))
     }
@@ -218,7 +220,7 @@ class Database(
             val processedOffset = msgIdToOffset(latestProcessedMsgId)
             val processedEpoch = msgIdToEpoch(latestProcessedMsgId)
             val logEpoch = log.epoch
-            val latestSubmittedOffset = log.latestSubmittedOffset
+            val latestSubmittedOffset = log.latestSubmittedOffset(0)
 
             when {
                 processedEpoch != logEpoch -> logNewEpoch()
@@ -236,6 +238,16 @@ class Database(
             compactor: Compactor,
             dbCatalog: Catalog? = null,
         ): Database = safelyOpening {
+            // Stage-4 cut: multi-partition is wired through the type system but not yet
+            // enabled at attach time. Unit 9 lifts the guard. See claude-docs/multi-part/decisions.md Q1.
+            if (dbConfig.partitions > 1) {
+                throw Incorrect(
+                    "Multi-partition databases are not yet supported (database '$dbName' declared partitions=${dbConfig.partitions})",
+                    "xtdb/multi-partition-not-yet-enabled",
+                    mapOf("db-name" to dbName, "partitions" to dbConfig.partitions)
+                )
+            }
+
             val indexerConfig = base.config.indexer
             val readOnly = dbConfig.isReadOnly
 
@@ -298,6 +310,7 @@ class Database(
                         termScope, allocator, storage.replicaLog, storage.bufferPool, state, compactorForDb,
                         watchers, dbCatalog, pendingBlock, afterReplicaMsgId,
                         hasExternalSource = hasExternalSource,
+                        partition = 0,
                         meterRegistry = base.meterRegistry,
                     )
 
@@ -347,13 +360,13 @@ class Database(
                         (state.liveIndex.latestCompletedTx?.txId ?: -1).toDouble()
                     },
                     gauge("node.tx.latestSubmittedMsgId") {
-                        storage.sourceLog.latestSubmittedMsgId.toDouble()
+                        storage.sourceLog.latestSubmittedMsgId(0).toDouble()
                     },
                     gauge("node.tx.latestProcessedMsgId") {
                         watchers.latestSourceMsgId.toDouble()
                     },
                     gauge("node.tx.lag.MsgId") {
-                        maxOf(storage.sourceLog.latestSubmittedMsgId - watchers.latestSourceMsgId, 0).toDouble()
+                        maxOf(storage.sourceLog.latestSubmittedMsgId(0) - watchers.latestSourceMsgId, 0).toDouble()
                     },
                 )
             } ?: emptyList()
@@ -379,12 +392,11 @@ class Database(
 
             if (indexerConfig.enabled && !readOnly) {
                 val listener = object : Log.SubscriptionListener<SourceMessage> {
-                    override suspend fun onPartitionsAssigned(partitions: Collection<Int>) =
-                        partitions.singleOrNull()
-                            ?.let { db.partitions[it]?.logProcessor?.onPartitionsAssigned(listOf(it)) }
+                    override suspend fun onPartitionAssigned(partition: Int) =
+                        db.partitions[partition]?.logProcessor?.onPartitionAssigned(partition)
 
-                    override suspend fun onPartitionsRevoked(partitions: Collection<Int>) {
-                        for (idx in partitions) db.partitions[idx]?.logProcessor?.onPartitionsRevoked(listOf(idx))
+                    override suspend fun onPartitionRevoked(partition: Int) {
+                        db.partitions[partition]?.logProcessor?.onPartitionRevoked(partition)
                     }
                 }
                 scope.launch { storage.sourceLog.openGroupSubscription(listener) }
@@ -423,12 +435,18 @@ class Database(
         val mode: Mode = Mode.READ_WRITE,
         val externalSource: ExternalSource.Factory? = null,
         val critical: Boolean = false,
+        val partitions: Int = 1,
     ) {
+        init {
+            require(partitions >= 1) { "partitions must be >= 1, got $partitions" }
+        }
+
         fun log(log: Log.Factory) = copy(log = log)
         fun storage(storage: Storage.Factory) = copy(storage = storage)
         fun mode(mode: Mode) = copy(mode = mode)
         fun externalSource(externalSource: ExternalSource.Factory?) = copy(externalSource = externalSource)
         fun critical(critical: Boolean) = copy(critical = critical)
+        fun partitions(partitions: Int) = copy(partitions = partitions)
 
         val isReadOnly: Boolean get() = mode == Mode.READ_ONLY
 
@@ -440,6 +458,9 @@ class Database(
                     dbConfig.mode = mode.toProto()
                     externalSource?.let { dbConfig.externalSource = ExternalSource.Factory.toProto(it) }
                     dbConfig.critical = critical
+                    // Skip the proto default — keeps single-partition serialisation byte-identical
+                    // to pre-#5557 logs and storage, so existing replay/golden files don't shift.
+                    if (partitions > 1) dbConfig.partitions = partitions
                 }.build()
 
         companion object {
@@ -455,12 +476,15 @@ class Database(
                     .externalSource(dbConfig.externalSource.takeIf { dbConfig.hasExternalSource() }
                         ?.let { ExternalSource.Factory.fromProto(it) })
                     .critical(dbConfig.critical)
+                    // Persisted configs from before this field existed serialise `partitions = 0`;
+                    // treat that as 1 so they round-trip as single-partition.
+                    .partitions(dbConfig.partitions.takeIf { it > 0 } ?: 1)
         }
     }
 
     interface Catalog : ILookup, Seqable, Iterable<Database>, IQuerySource.QueryCatalog {
         companion object {
-            private suspend fun Database.sync() = watchers.awaitSource(sourceLog.latestSubmittedMsgId)
+            private suspend fun Database.sync() = watchers.awaitSource(sourceLog.latestSubmittedMsgId(0))
 
             private suspend fun Catalog.awaitAll0(token: String) = coroutineScope {
                 val basis = token.decodeTxBasisToken()

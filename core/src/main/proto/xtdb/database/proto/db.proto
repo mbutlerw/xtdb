@@ -50,5 +50,9 @@ message DatabaseConfig {
     DatabaseMode mode = 7;
     google.protobuf.Any external_source = 8;
     bool critical = 9;
+
+    // Per #5557. 0 (proto default) is treated as 1 by the Kotlin layer, so persisted
+    // configs from before this field existed round-trip as single-partition.
+    int32 partitions = 10;
 }
 

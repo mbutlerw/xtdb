@@ -101,7 +101,7 @@ class ExternalSourceTest {
         val tableCatalog = mockk<xtdb.catalog.TableCatalog>(relaxed = true)
         val dbState = DatabaseState("test", blockCatalog, tableCatalog, trieCatalog, liveIndex)
         val dbStorage = DatabaseStorage(sourceLog, replicaLog, bufferPool, null)
-        val replicaProducer = replicaLog.openAtomicProducer("test-leader")
+        val replicaProducer = replicaLog.openAtomicProducer("test-leader", 0)
         val compactor = mockk<Compactor.ForDatabase>(relaxed = true)
         val blockUploader = BlockUploader(dbStorage, dbState, compactor, null, null)
 
@@ -125,11 +125,11 @@ class ExternalSourceTest {
         extSource.channel.send(null)
         delay(500.milliseconds)
 
-        assertTrue(replicaLog.latestSubmittedOffset >= 0, "replica log should have received a message")
+        assertTrue(replicaLog.latestSubmittedOffset(0) >= 0, "replica log should have received a message")
 
         val replicaMessages = mutableListOf<ReplicaMessage>()
         backgroundScope.launch {
-            replicaLog.tailAll(-1) { records ->
+            replicaLog.tailAll(0, -1) { records ->
                 replicaMessages.addAll(records.map { it.message })
             }
         }
@@ -158,7 +158,7 @@ class ExternalSourceTest {
 
         val resolvedTxs = mutableListOf<ReplicaMessage.ResolvedTx>()
         backgroundScope.launch {
-            replicaLog.tailAll(-1) { records ->
+            replicaLog.tailAll(0, -1) { records ->
                 records.forEach { (it.message as? ReplicaMessage.ResolvedTx)?.let(resolvedTxs::add) }
             }
         }
@@ -183,7 +183,7 @@ class ExternalSourceTest {
 
         delay(500.milliseconds)
 
-        assertTrue(replicaLog.latestSubmittedOffset >= 0, "source records should flow through to the leader")
+        assertTrue(replicaLog.latestSubmittedOffset(0) >= 0, "source records should flow through to the leader")
     }
 
     @Test

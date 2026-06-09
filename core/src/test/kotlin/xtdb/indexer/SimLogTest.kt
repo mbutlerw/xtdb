@@ -21,7 +21,7 @@ class SimLogTest : SimulationTestBase() {
                 SimLog<String>("test", rand).use { log ->
                     launchSimLog(log)
 
-                    launch { log.tailAll(afterMsgId = -1) { _ -> error("plainConsumer failure") } }
+                    launch { log.tailAll(partition = 0, afterMsgId = -1) { _ -> error("plainConsumer failure") } }
 
                     log.appendMessage("trigger")
                 }
@@ -40,10 +40,10 @@ class SimLogTest : SimulationTestBase() {
 
                     launch {
                         log.openGroupSubscription(object : Log.SubscriptionListener<String> {
-                            override suspend fun onPartitionsAssigned(partitions: Collection<Int>) =
+                            override suspend fun onPartitionAssigned(partition: Int) =
                                 Log.TailSpec<String>(afterMsgId = -1L) { _ -> error("groupConsumer failure") }
 
-                            override suspend fun onPartitionsRevoked(partitions: Collection<Int>) {}
+                            override suspend fun onPartitionRevoked(partition: Int) {}
                         })
                     }
 

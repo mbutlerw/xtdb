@@ -31,10 +31,10 @@ interface MessageCodec<M> {
 interface Log<M> : AutoCloseable {
 
     interface Factory {
-        fun openSourceLog(remotes: Map<RemoteAlias, Remote>): Log<SourceMessage>
-        fun openReadOnlySourceLog(remotes: Map<RemoteAlias, Remote>): Log<SourceMessage>
-        fun openReplicaLog(remotes: Map<RemoteAlias, Remote>): Log<ReplicaMessage>
-        fun openReadOnlyReplicaLog(remotes: Map<RemoteAlias, Remote>): Log<ReplicaMessage>
+        fun openSourceLog(remotes: Map<RemoteAlias, Remote>, partitions: Int = 1): Log<SourceMessage>
+        fun openReadOnlySourceLog(remotes: Map<RemoteAlias, Remote>, partitions: Int = 1): Log<SourceMessage>
+        fun openReplicaLog(remotes: Map<RemoteAlias, Remote>, partitions: Int = 1): Log<ReplicaMessage>
+        fun openReadOnlyReplicaLog(remotes: Map<RemoteAlias, Remote>, partitions: Int = 1): Log<ReplicaMessage>
 
         fun writeTo(dbConfig: DatabaseConfig.Builder)
 
@@ -93,12 +93,11 @@ interface Log<M> : AutoCloseable {
      * so that if we're starting up a new node it catches up to the latest offset,
      * then it's the latest-submitted-offset of _this_ node.
      */
-    val latestSubmittedOffset: LogOffset
+    fun latestSubmittedOffset(partition: Int = 0): LogOffset
 
     val epoch: Int
 
-    val latestSubmittedMsgId: MessageId
-        get() = offsetToMsgId(epoch, latestSubmittedOffset)
+    fun latestSubmittedMsgId(partition: Int = 0): MessageId = offsetToMsgId(epoch, latestSubmittedOffset(partition))
 
     class MessageMetadata(
         val epoch: Int,
@@ -108,15 +107,16 @@ interface Log<M> : AutoCloseable {
         val msgId: MessageId get() = offsetToMsgId(epoch, logOffset)
     }
 
-    suspend fun appendMessage(message: M): MessageMetadata
+    suspend fun appendMessage(message: M, partition: Int = 0): MessageMetadata
 
-    fun appendMessageBlocking(message: M): MessageMetadata = runBlocking { appendMessage(message) }
+    fun appendMessageBlocking(message: M, partition: Int = 0): MessageMetadata =
+        runBlocking { appendMessage(message, partition) }
 
     /**
      * @param transactionalId uniquely identifies this producer for Kafka's transaction coordinator.
      *   Must be stable across restarts for transaction recovery.
      */
-    fun openAtomicProducer(transactionalId: String): AtomicProducer<M>
+    fun openAtomicProducer(transactionalId: String, partition: Int): AtomicProducer<M>
 
     interface AtomicProducer<M> : AutoCloseable {
         fun openTx(): Tx<M>
@@ -144,25 +144,25 @@ interface Log<M> : AutoCloseable {
         }
     }
 
-    fun readLastMessage(): M?
+    fun readLastMessage(partition: Int = 0): M?
 
     /**
      * Reads records in the range [fromMsgId, toMsgId) (start-inclusive, end-exclusive).
      * Returns a lazy sequence of decoded records in offset order.
      * If toMsgId exceeds the latest submitted offset, reads up to the latest available record.
      */
-    fun readRecords(fromMsgId: MessageId, toMsgId: MessageId): Sequence<Record<M>>
+    fun readRecords(partition: Int, fromMsgId: MessageId, toMsgId: MessageId): Sequence<Record<M>>
 
-    suspend fun tailAll(afterMsgId: MessageId, processor: RecordProcessor<M>)
+    suspend fun tailAll(partition: Int, afterMsgId: MessageId, processor: RecordProcessor<M>)
     suspend fun openGroupSubscription(listener: SubscriptionListener<M>)
 
     interface SubscriptionListener<M> {
-        suspend fun onPartitionsAssigned(partitions: Collection<Int>): TailSpec<M>?
-        fun onPartitionsAssignedSync(partitions: Collection<Int>): TailSpec<M>? = runBlocking { onPartitionsAssigned(partitions) }
-        suspend fun onPartitionsRevoked(partitions: Collection<Int>)
-        fun onPartitionsRevokedSync(partitions: Collection<Int>) = runBlocking { onPartitionsRevoked(partitions) }
-        suspend fun onPartitionsLost(partitions: Collection<Int>) = onPartitionsRevoked(partitions)
-        fun onPartitionsLostSync(partitions: Collection<Int>) = runBlocking { onPartitionsLost(partitions) }
+        suspend fun onPartitionAssigned(partition: Int): TailSpec<M>?
+        fun onPartitionAssignedSync(partition: Int): TailSpec<M>? = runBlocking { onPartitionAssigned(partition) }
+        suspend fun onPartitionRevoked(partition: Int)
+        fun onPartitionRevokedSync(partition: Int) = runBlocking { onPartitionRevoked(partition) }
+        suspend fun onPartitionLost(partition: Int) = onPartitionRevoked(partition)
+        fun onPartitionLostSync(partition: Int) = runBlocking { onPartitionLost(partition) }
     }
 
     data class TailSpec<M>(val afterMsgId: MessageId, val processor: RecordProcessor<M>)

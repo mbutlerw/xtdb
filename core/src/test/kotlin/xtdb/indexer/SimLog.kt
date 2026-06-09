@@ -20,8 +20,9 @@ private val LOG = SimLog::class.logger
 internal class SimLog<M>(private val name: String, private val rand: Random) : Log<M> {
     override val epoch: Int get() = 0
 
-    override var latestSubmittedOffset: LogOffset = -1
-        private set
+    private var latestSubmittedOffsetVal: LogOffset = -1
+
+    override fun latestSubmittedOffset(partition: Int): LogOffset = latestSubmittedOffsetVal
 
     /**
      * A consumer that participates in leader election (Kafka consumer group semantics).
@@ -132,7 +133,7 @@ internal class SimLog<M>(private val name: String, private val rand: Random) : L
 
         leader?.let { old ->
             LOG.debug("$name/chooseLeader: revoking old leader")
-            old.listener.onPartitionsRevoked(listOf(0))
+            old.listener.onPartitionRevoked(0)
             old.tailSpec = null
             leader = null
         }
@@ -140,7 +141,7 @@ internal class SimLog<M>(private val name: String, private val rand: Random) : L
         if (groupConsumers.isNotEmpty()) {
             val newLeader = groupConsumers.random(rand)
             LOG.debug("$name/chooseLeader: assigning new leader")
-            val tailSpec = newLeader.listener.onPartitionsAssigned(listOf(0))
+            val tailSpec = newLeader.listener.onPartitionAssigned(0)
             newLeader.tailSpec = tailSpec
             if (tailSpec != null) {
                 val startOffset = (MsgIdUtil.afterMsgIdToOffset(epoch, tailSpec.afterMsgId) + 1).toInt()
@@ -163,7 +164,7 @@ internal class SimLog<M>(private val name: String, private val rand: Random) : L
     }
 
     private fun appendSync(message: M): Log.MessageMetadata {
-        val offset = ++latestSubmittedOffset
+        val offset = ++latestSubmittedOffsetVal
         val ts = Instant.now()
         LOG.debug("$name/append: offset=$offset message=${message!!::class.simpleName}")
         topic += Log.Record(epoch, offset, ts, message)
@@ -172,10 +173,10 @@ internal class SimLog<M>(private val name: String, private val rand: Random) : L
         return Log.MessageMetadata(epoch, offset, ts)
     }
 
-    override suspend fun appendMessage(message: M): Log.MessageMetadata =
+    override suspend fun appendMessage(message: M, partition: Int): Log.MessageMetadata =
         appendSync(message)
 
-    override fun openAtomicProducer(transactionalId: String) = object : Log.AtomicProducer<M> {
+    override fun openAtomicProducer(transactionalId: String, partition: Int) = object : Log.AtomicProducer<M> {
         override fun openTx() = object : Log.AtomicProducer.Tx<M> {
             private val buffer = mutableListOf<Pair<M, CompletableDeferred<Log.MessageMetadata>>>()
             private var isOpen = true
@@ -210,15 +211,15 @@ internal class SimLog<M>(private val name: String, private val rand: Random) : L
         override fun close() {}
     }
 
-    override fun readLastMessage(): M? = topic.lastOrNull()?.message
+    override fun readLastMessage(partition: Int): M? = topic.lastOrNull()?.message
 
-    override fun readRecords(fromMsgId: MessageId, toMsgId: MessageId): Sequence<Log.Record<M>> {
+    override fun readRecords(partition: Int, fromMsgId: MessageId, toMsgId: MessageId): Sequence<Log.Record<M>> {
         val fromOffset = MsgIdUtil.msgIdToOffset(fromMsgId).toInt()
         val toOffset = MsgIdUtil.msgIdToOffset(toMsgId).toInt()
         return topic.subList(fromOffset.coerceAtLeast(0), toOffset.coerceAtMost(topic.size)).asSequence()
     }
 
-    override suspend fun tailAll(afterMsgId: MessageId, processor: Log.RecordProcessor<M>) {
+    override suspend fun tailAll(partition: Int, afterMsgId: MessageId, processor: Log.RecordProcessor<M>) {
         val startOffset = (MsgIdUtil.afterMsgIdToOffset(epoch, afterMsgId) + 1).toInt()
         LOG.debug("$name/tailAll: startOffset=$startOffset topicSize=${topic.size}")
         val consumer = PlainConsumer(processor, startOffset, coroutineContext.job)

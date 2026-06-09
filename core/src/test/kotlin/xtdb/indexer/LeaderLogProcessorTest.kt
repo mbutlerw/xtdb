@@ -66,7 +66,7 @@ class LeaderLogProcessorTest {
         val tableCatalog = mockk<TableCatalog>(relaxed = true)
         val dbState = DatabaseState("test", blockCatalog, tableCatalog, trieCatalog, liveIndex)
         val dbStorage = DatabaseStorage(sourceLog, replicaLog, bufferPool, null)
-        val replicaProducer = replicaLog.openAtomicProducer("test-leader")
+        val replicaProducer = replicaLog.openAtomicProducer("test-leader", 0)
         val blockUploader = BlockUploader(dbStorage, dbState, compactor, null, null, uploadDispatcher)
 
         return LeaderLogProcessor(
@@ -100,7 +100,7 @@ class LeaderLogProcessorTest {
         ))
 
         verify { trieCatalog.addTries(any(), any(), any()) }
-        assertTrue(replicaLog.latestSubmittedOffset >= 0, "replica log should have received a message")
+        assertTrue(replicaLog.latestSubmittedOffset(0) >= 0, "replica log should have received a message")
     }
 
     @Test
@@ -122,7 +122,7 @@ class LeaderLogProcessorTest {
         val sourceLog = InMemoryLog<SourceMessage>(InstantSource.system(), 0)
         val dbState = DatabaseState("test", blockCatalog, tableCatalog, trieCatalog, liveIndex)
         val dbStorage = DatabaseStorage(sourceLog, replicaLog, bufferPool, null)
-        val replicaProducer = replicaLog.openAtomicProducer("test-leader")
+        val replicaProducer = replicaLog.openAtomicProducer("test-leader", 0)
         val blockUploader = BlockUploader(dbStorage, dbState, compactor, null, null, StandardTestDispatcher(testScheduler))
 
         val lp = LeaderLogProcessor(
@@ -142,7 +142,7 @@ class LeaderLogProcessorTest {
         verify { liveIndex.finishBlock(any(), eq(0)) }
         verify { liveIndex.nextBlock() }
         verify { compactor.signalBlock() }
-        assertTrue(replicaLog.latestSubmittedOffset >= 0, "replica log should have block messages")
+        assertTrue(replicaLog.latestSubmittedOffset(0) >= 0, "replica log should have block messages")
     }
 
     @Test
@@ -189,7 +189,7 @@ class LeaderLogProcessorTest {
         val sourceLog = InMemoryLog<SourceMessage>(InstantSource.system(), 0)
         val dbState = DatabaseState("test", blockCatalog, tableCatalog, trieCatalog, liveIndex)
         val dbStorage = DatabaseStorage(sourceLog, replicaLog, bufferPool, null)
-        val replicaProducer = replicaLog.openAtomicProducer("test-leader")
+        val replicaProducer = replicaLog.openAtomicProducer("test-leader", 0)
         val blockUploader = BlockUploader(dbStorage, dbState, compactor, null, null, StandardTestDispatcher(testScheduler))
 
         val lp = LeaderLogProcessor(
@@ -207,7 +207,7 @@ class LeaderLogProcessorTest {
         ))
 
         val replicaMessages = mutableListOf<ReplicaMessage>()
-        backgroundScope.launch { replicaLog.tailAll(-1) { records ->
+        backgroundScope.launch { replicaLog.tailAll(0, -1) { records ->
             replicaMessages.addAll(records.map { it.message })
         } }
 

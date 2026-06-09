@@ -43,6 +43,7 @@ class FollowerLogProcessor @JvmOverloads constructor(
     pendingBlock: PendingBlock?,
     afterReplicaMsgId: MessageId,
     private val hasExternalSource: Boolean,
+    private val partition: Int = 0,
     private val meterRegistry: MeterRegistry? = null,
     private val maxBufferedRecords: Int = 1024,
 ) : LogProcessor.FollowerProcessor {
@@ -283,7 +284,7 @@ class FollowerLogProcessor @JvmOverloads constructor(
     init {
         scope.launchWithCleanup(cleanup = { this@FollowerLogProcessor.allocator.close() }) {
             try {
-                replicaLog.tailAll(afterReplicaMsgId, this@FollowerLogProcessor)
+                replicaLog.tailAll(partition, afterReplicaMsgId, this@FollowerLogProcessor)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {

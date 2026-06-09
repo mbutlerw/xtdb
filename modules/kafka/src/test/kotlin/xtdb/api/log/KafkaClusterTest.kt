@@ -93,7 +93,7 @@ class KafkaClusterTest {
                 KafkaCluster.LogFactory("my-cluster", topicName)
                     .openSourceLog(mapOf("my-cluster" to cluster))
                     .use { log ->
-                        val job = launch { log.tailAll(-1, subscriber) }
+                        val job = launch { log.tailAll(0, -1, subscriber) }
                         try {
                             val txPayload = ByteBuffer.allocate(9).put(-1).putLong(42).flip().array()
                             log.appendMessage(SourceMessage.LegacyTx(txPayload))
@@ -269,7 +269,7 @@ class KafkaClusterTest {
                         KafkaCluster.LogFactory("my-cluster", topicName, autoCreateTopic = false)
                             .openReplicaLog(mapOf("my-cluster" to cluster))
                             .use { log ->
-                                val job = launch { log.tailAll(-1, subscriber) }
+                                val job = launch { log.tailAll(0, -1, subscriber) }
                                 try {
                                     log.appendMessage(blockUploaded)
 
@@ -341,21 +341,21 @@ class KafkaClusterTest {
     private class TrackingListener(
         private val afterMsgId: MessageId = -1L,
     ) : SubscriptionListener<SourceMessage> {
-        val assignedPartitions = CopyOnWriteArrayList<Collection<Int>>()
-        val revokedPartitions = CopyOnWriteArrayList<Collection<Int>>()
+        val assignedPartitions = CopyOnWriteArrayList<Int>()
+        val revokedPartitions = CopyOnWriteArrayList<Int>()
         val records = CopyOnWriteArrayList<Record<SourceMessage>>()
 
         val isAssigned get() = assignedPartitions.size > revokedPartitions.size
 
         private val processor = RecordProcessor<SourceMessage> { recs -> records.addAll(recs) }
 
-        override suspend fun onPartitionsAssigned(partitions: Collection<Int>): TailSpec<SourceMessage> {
-            assignedPartitions.add(partitions)
+        override suspend fun onPartitionAssigned(partition: Int): TailSpec<SourceMessage> {
+            assignedPartitions.add(partition)
             return TailSpec(afterMsgId, processor)
         }
 
-        override suspend fun onPartitionsRevoked(partitions: Collection<Int>) {
-            revokedPartitions.add(partitions)
+        override suspend fun onPartitionRevoked(partition: Int) {
+            revokedPartitions.add(partition)
         }
     }
 
@@ -429,13 +429,13 @@ class KafkaClusterTest {
         val release = CompletableDeferred<Unit>()
         val records = CopyOnWriteArrayList<Record<SourceMessage>>()
 
-        override suspend fun onPartitionsAssigned(partitions: Collection<Int>): TailSpec<SourceMessage> {
+        override suspend fun onPartitionAssigned(partition: Int): TailSpec<SourceMessage> {
             entered.complete(Unit)
             release.await()
             return TailSpec(-1L, RecordProcessor { recs -> records.addAll(recs) })
         }
 
-        override suspend fun onPartitionsRevoked(partitions: Collection<Int>) {}
+        override suspend fun onPartitionRevoked(partition: Int) {}
     }
 
     @Test
@@ -473,11 +473,11 @@ class KafkaClusterTest {
     }
 
     private class ThrowingOnAssignListener(private val toThrow: Throwable) : SubscriptionListener<SourceMessage> {
-        override suspend fun onPartitionsAssigned(partitions: Collection<Int>): TailSpec<SourceMessage> {
+        override suspend fun onPartitionAssigned(partition: Int): TailSpec<SourceMessage> {
             throw toThrow
         }
 
-        override suspend fun onPartitionsRevoked(partitions: Collection<Int>) {}
+        override suspend fun onPartitionRevoked(partition: Int) {}
     }
 
     @Test
@@ -666,7 +666,7 @@ class KafkaClusterTest {
                         // Anchor inside the now-truncated prefix — seek lands below the earliest available offset.
                         val anchorInTruncatedPrefix = MsgIdUtil.offsetToMsgId(0, 1L)
                         val job = launch(SupervisorJob()) {
-                            try { log.tailAll(anchorInTruncatedPrefix, subscriber) }
+                            try { log.tailAll(0, anchorInTruncatedPrefix, subscriber) }
                             catch (e: Throwable) { caught.set(e) }
                         }
                         val completed = withTimeoutOrNull(3.seconds) { job.join() } != null
@@ -688,9 +688,9 @@ class KafkaClusterTest {
         val anchorInTruncatedPrefix = MsgIdUtil.offsetToMsgId(0, 1L)
         val caught = AtomicReference<Throwable?>(null)
         val listener = object : SubscriptionListener<SourceMessage> {
-            override suspend fun onPartitionsAssigned(partitions: Collection<Int>): TailSpec<SourceMessage> =
+            override suspend fun onPartitionAssigned(partition: Int): TailSpec<SourceMessage> =
                 TailSpec(afterMsgId = anchorInTruncatedPrefix, processor = RecordProcessor { _ -> })
-            override suspend fun onPartitionsRevoked(partitions: Collection<Int>) {}
+            override suspend fun onPartitionRevoked(partition: Int) {}
         }
 
         KafkaCluster.ClusterFactory(container.bootstrapServers)
@@ -792,7 +792,7 @@ class KafkaClusterTest {
                         log.appendMessage(txMessage(2))
                         log.appendMessage(txMessage(3))
 
-                        val job = launch { log.tailAll(-1L, subscriber) }
+                        val job = launch { log.tailAll(0, -1L, subscriber) }
                         try {
                             withTimeoutOrNull(5.seconds) {
                                 while (synchronized(msgs) { msgs.flatten().size } < 3) delay(100.milliseconds)
@@ -813,9 +813,9 @@ class KafkaClusterTest {
         val msgs = synchronizedList(mutableListOf<List<Record<SourceMessage>>>())
         val processor = RecordProcessor<SourceMessage> { records -> msgs.add(records) }
         val listener = object : SubscriptionListener<SourceMessage> {
-            override suspend fun onPartitionsAssigned(partitions: Collection<Int>): TailSpec<SourceMessage> =
+            override suspend fun onPartitionAssigned(partition: Int): TailSpec<SourceMessage> =
                 TailSpec(afterMsgId = -1L, processor = processor)
-            override suspend fun onPartitionsRevoked(partitions: Collection<Int>) {}
+            override suspend fun onPartitionRevoked(partition: Int) {}
         }
 
         KafkaCluster.ClusterFactory(container.bootstrapServers)

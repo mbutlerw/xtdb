@@ -26,6 +26,7 @@ class LocalLogTest {
         val receivedRecords = mutableListOf<Record<SourceMessage>>()
         val job = launch {
             log.tailAll(
+                0,
                 -1L,
                 object : Log.RecordProcessor<SourceMessage> {
                     override suspend fun processRecords(records: List<Record<SourceMessage>>) {
@@ -78,5 +79,42 @@ class LocalLogTest {
             assertTrue(lastMessage is SourceMessage.LegacyTx)
             assertArrayEquals(byteArrayOf(-1, 3), (lastMessage as SourceMessage.LegacyTx).payload)
         }
+    }
+
+    @Test
+    fun `multi-partition writes land in separate LOG-N files`() = runTest {
+        val log = LocalLog.Factory(tempDir.resolve("log")).openSourceLog(emptyMap(), partitions = 3)
+        log.use {
+            log.appendMessage(txMessage(0), partition = 0)
+            log.appendMessage(txMessage(1), partition = 1)
+            log.appendMessage(txMessage(2), partition = 2)
+
+            assertEquals(0L, log.latestSubmittedOffset(0))
+            assertEquals(0L, log.latestSubmittedOffset(1))
+            assertEquals(0L, log.latestSubmittedOffset(2))
+
+            val msg0 = log.readLastMessage(0) as SourceMessage.LegacyTx
+            val msg1 = log.readLastMessage(1) as SourceMessage.LegacyTx
+            val msg2 = log.readLastMessage(2) as SourceMessage.LegacyTx
+            assertArrayEquals(byteArrayOf(-1, 0), msg0.payload)
+            assertArrayEquals(byteArrayOf(-1, 1), msg1.payload)
+            assertArrayEquals(byteArrayOf(-1, 2), msg2.payload)
+        }
+
+        assertTrue(tempDir.resolve("log/LOG-0").toFile().exists())
+        assertTrue(tempDir.resolve("log/LOG-1").toFile().exists())
+        assertTrue(tempDir.resolve("log/LOG-2").toFile().exists())
+        assertTrue(!tempDir.resolve("log/LOG").toFile().exists(),
+            "single-partition LOG must not appear in a multi-partition setup")
+    }
+
+    @Test
+    fun `single-partition keeps the existing LOG filename`() = runTest {
+        val log = LocalLog.Factory(tempDir.resolve("log")).openSourceLog(emptyMap(), partitions = 1)
+        log.use { log.appendMessage(txMessage(1)) }
+
+        assertTrue(tempDir.resolve("log/LOG").toFile().exists(),
+            "single-partition is back-compat: must keep the LOG filename")
+        assertTrue(!tempDir.resolve("log/LOG-0").toFile().exists())
     }
 }
