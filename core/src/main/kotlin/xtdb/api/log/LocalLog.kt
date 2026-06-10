@@ -355,17 +355,11 @@ class LocalLog<M>(
     }
 
     override suspend fun openGroupSubscription(listener: SubscriptionListener<M>) = coroutineScope {
-        val assigned = mutableListOf<Int>()
-        try {
-            for (p in 0 until partitions) {
-                val spec = listener.onPartitionAssigned(p) ?: continue
-                assigned += p
-                launch { tailAll(p, spec.afterMsgId, spec.processor) }
-            }
-            awaitCancellation()
-        } finally {
-            withContext(NonCancellable) {
-                for (p in assigned) listener.onPartitionRevoked(p)
+        for (p in 0 until partitions) {
+            val spec = listener.onPartitionAssigned(p) ?: continue
+            launch {
+                try { tailAll(p, spec.afterMsgId, spec.processor) }
+                finally { withContext(NonCancellable) { listener.onPartitionRevoked(p) } }
             }
         }
     }
