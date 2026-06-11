@@ -476,9 +476,7 @@ class Database(
                     dbConfig.mode = mode.toProto()
                     externalSource?.let { dbConfig.externalSource = ExternalSource.Factory.toProto(it) }
                     dbConfig.critical = critical
-                    // Skip the proto default — keeps single-partition serialisation byte-identical
-                    // to pre-#5557 logs and storage, so existing replay/golden files don't shift.
-                    if (partitions > 1) dbConfig.partitions = partitions
+                    dbConfig.partitions = partitions
                 }.build()
 
         companion object {
