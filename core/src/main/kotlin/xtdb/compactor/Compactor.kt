@@ -201,13 +201,6 @@ interface Compactor : AutoCloseable {
             }
 
             init {
-                // Free the driver's resources when the compactor job completes — fires even if the
-                // job is cancelled before the loop is ever scheduled, so the driver never leaks.
-                dbJob.invokeOnCompletion {
-                    driver.close()
-                    LOGGER.debug("compactor closed")
-                }
-
                 val jobsScope = CoroutineScope(SupervisorJob(dbJob) + jobsDispatcher)
 
                 loopScope.launch(CoroutineName("outer loop")) {
@@ -263,6 +256,18 @@ interface Compactor : AutoCloseable {
                         }
                     }
                 }
+
+                // Per-job coroutines on `jobsScope` use the driver heavily, so we have to wait
+                // for them to stop before closing it — the cleanup explicitly `cancelAndJoin`s
+                // `jobsScope`. The structural-concurrency property the helper itself provides
+                // (parent close waits for cleanup) takes care of the rest. See
+                // `dev/doc/coroutines.adoc` for why this uses `launchWithCleanup` rather than
+                // `dbJob.invokeOnCompletion`.
+                loopScope.launchWithCleanup(cleanup = {
+                    jobsScope.coroutineContext.job.cancelAndJoin()
+                    driver.close()
+                    LOGGER.debug("compactor closed")
+                })
             }
 
             override fun signalBlock() {
