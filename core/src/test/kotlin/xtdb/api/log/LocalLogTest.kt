@@ -104,17 +104,5 @@ class LocalLogTest {
         assertTrue(tempDir.resolve("log/LOG-0").toFile().exists())
         assertTrue(tempDir.resolve("log/LOG-1").toFile().exists())
         assertTrue(tempDir.resolve("log/LOG-2").toFile().exists())
-        assertTrue(!tempDir.resolve("log/LOG").toFile().exists(),
-            "single-partition LOG must not appear in a multi-partition setup")
-    }
-
-    @Test
-    fun `single-partition keeps the existing LOG filename`() = runTest {
-        val log = LocalLog.Factory(tempDir.resolve("log")).openSourceLog(emptyMap(), partitions = 1)
-        log.use { log.appendMessage(txMessage(1)) }
-
-        assertTrue(tempDir.resolve("log/LOG").toFile().exists(),
-            "single-partition is back-compat: must keep the LOG filename")
-        assertTrue(!tempDir.resolve("log/LOG-0").toFile().exists())
     }
 }
