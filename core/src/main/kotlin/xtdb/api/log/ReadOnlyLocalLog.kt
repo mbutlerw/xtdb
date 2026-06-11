@@ -44,9 +44,7 @@ class ReadOnlyLocalLog<M>(
 
     private val scope = CoroutineScope(coroutineContext)
 
-    // Single-partition keeps the existing LOG filename for back-compat; multi-partition splits to LOG-0, LOG-1, …
-    private fun partitionFileName(partition: Int) =
-        if (partitions == 1) baseFileName else "$baseFileName-$partition"
+    private fun partitionFileName(partition: Int) = "$baseFileName-$partition"
 
     private fun partitionFilePath(partition: Int) = rootPath.resolve(partitionFileName(partition))
 

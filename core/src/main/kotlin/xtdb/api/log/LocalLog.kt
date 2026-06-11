@@ -120,9 +120,7 @@ class LocalLog<M>(
         val onCommit: CompletableDeferred<Record<M>>
     )
 
-    // Single-partition keeps the existing LOG filename for back-compat; multi-partition splits to LOG-0, LOG-1, …
-    private fun partitionFilePath(partition: Int) =
-        rootPath.resolve(if (partitions == 1) baseFileName else "$baseFileName-$partition")
+    private fun partitionFilePath(partition: Int) = rootPath.resolve("$baseFileName-$partition")
 
     private inner class PartitionState(val partition: Int) {
         val logFilePath: Path = partitionFilePath(partition)
