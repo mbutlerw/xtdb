@@ -296,6 +296,10 @@ class LeaderLogProcessor(
     // #5703 for why this uses launchWithCleanup rather than invokeOnCompletion.
     private val termJob: Job = scope.launchWithCleanup(
         cleanup = {
+            // term-owned; freed in cleanup, not the persister's finally (dev/doc/coroutines.adoc, #5711)
+            sourceLogCh.close()
+            extSourceCh.close()
+            gcCh.close()
             extSource?.close()
             replicaProducer.close()
             this@LeaderLogProcessor.allocator.close()
@@ -338,10 +342,6 @@ class LeaderLogProcessor(
                         }
                     }
                 } catch (_: Throwable) {
-                } finally {
-                    sourceLogCh.close()
-                    extSourceCh.close()
-                    gcCh.close()
                 }
             }
 
