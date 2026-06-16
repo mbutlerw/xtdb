@@ -58,7 +58,7 @@ class MockDb(
     val dbState: DatabaseState get() = DatabaseState(name, null, null, trieCatalog, null)
 }
 
-private val LOGGER = CompactorMockDriver::class.logger
+private val LOGGER = CompactorMockDriverFactory::class.logger
 
 enum class TemporalSplitting {
     CURRENT,
@@ -72,7 +72,7 @@ data class CompactorDriverConfig(
     val blocksPerWeek: Long = 140
 )
 
-class CompactorMockDriver(
+class CompactorMockDriverFactory(
     val dispatcher: CoroutineDispatcher,
     val baseSeed: Int,
     config: CompactorDriverConfig
@@ -89,27 +89,39 @@ class CompactorMockDriver(
     val sharedFlow = MutableSharedFlow<AppendMessage>(extraBufferCapacity = Int.MAX_VALUE)
     var nextSystemId = 0
 
+    // Every driver's broadcast-listener coroutine is a child of this scope. The test cancels it
+    // once at teardown (a single top-level bridge), rather than each driver's close() blocking on
+    // its own listener — a runBlocking-in-leaf-close that deadlocks the single-threaded sim
+    // dispatcher when it runs inside the compactor's cleanup fence (#5711). SupervisorJob so one
+    // system's listener failing doesn't cancel the others.
+    val scope = CoroutineScope(dispatcher + SupervisorJob())
+
     override fun create(allocator: BufferAllocator, dbStorage: DatabaseStorage, dbState: DatabaseState, watchers: Watchers): Driver {
         val systemId = nextSystemId++
-        return ForDatabase(dbStorage, dbState, systemId)
+        return CompactorMockDriver(dbStorage, dbState, systemId)
     }
 
-    inner class ForDatabase(val dbStorage: DatabaseStorage, val dbState: DatabaseState, val systemId: Int) : Driver {
+    // Private to the factory: callers only ever see the `Driver` interface `create` returns.
+    private inner class CompactorMockDriver(val dbStorage: DatabaseStorage, val dbState: DatabaseState, val systemId: Int) : Driver {
         val trieCatalog = dbState.trieCatalog
         val bufferPool = dbStorage.bufferPool
 
-        val job = CoroutineScope(dispatcher).launch {
-            sharedFlow.collect { msg ->
-                val trieKeys = msg.triesAdded.tries.map { it.trieKey }
-                LOGGER.debug("[channel msg received] systemId=$systemId received ${trieKeys.size} tries: $trieKeys")
-                yield() // force suspension mid-message processing
-                msg.triesAdded.tries.groupBy { it.tableName }.forEach { (tableName, tries) ->
-                    val tableRef = TableRef.parse(dbState.name, tableName)
-                    addTriesToBufferPool(bufferPool, tableRef, tries)
-                    trieCatalog.addTries(tableRef, tries, msg.msgTimestamp)
-                }
+        // Fire-and-forget: the factory scope owns this listener's lifetime (cancelled at teardown),
+        // so there's no per-driver handle to keep.
+        init {
+            scope.launch {
+                sharedFlow.collect { msg ->
+                    val trieKeys = msg.triesAdded.tries.map { it.trieKey }
+                    LOGGER.debug("[channel msg received] systemId=$systemId received ${trieKeys.size} tries: $trieKeys")
+                    yield() // force suspension mid-message processing
+                    msg.triesAdded.tries.groupBy { it.tableName }.forEach { (tableName, tries) ->
+                        val tableRef = TableRef.parse(dbState.name, tableName)
+                        addTriesToBufferPool(bufferPool, tableRef, tries)
+                        trieCatalog.addTries(tableRef, tries, msg.msgTimestamp)
+                    }
 
-                LOGGER.debug("[channel msg processed] systemId=$systemId added ${trieKeys.size} tries to catalog: $trieKeys")
+                    LOGGER.debug("[channel msg processed] systemId=$systemId added ${trieKeys.size} tries to catalog: $trieKeys")
+                }
             }
         }
 
@@ -216,11 +228,9 @@ class CompactorMockDriver(
             LOGGER.debug("[publishTries completed] systemId=$systemId")
         }
 
-        override fun close() {
-            runBlocking {
-                job.cancelAndJoin()
-            }
-        }
+        // The listener's lifetime rides the factory `scope`; nothing per-driver to tear down
+        // (the mock owns no resources — contrast the real driver, which closes its allocator here).
+        override fun close() = Unit
     }
 }
 
@@ -276,14 +286,14 @@ class CompactorSimulationTest : SimulationTestBase() {
     var numberOfSystems: Int = 1
     private lateinit var allocator: BufferAllocator
     private lateinit var sharedBufferPool: BufferPool
-    private lateinit var mockDriver: CompactorMockDriver
+    private lateinit var mockDriver: CompactorMockDriverFactory
     private lateinit var jobCalculator: Compactor.JobCalculator
     private lateinit var dbs: List<MockDb>
 
     @BeforeEach
     fun setUp() {
         setLogLevel.invoke("xtdb.compactor".symbol, logLevel)
-        mockDriver = CompactorMockDriver(dispatcher, currentSeed, driverConfig)
+        mockDriver = CompactorMockDriverFactory(dispatcher, currentSeed, driverConfig)
         jobCalculator = createJobCalculator()
         allocator = RootAllocator()
 
@@ -303,6 +313,9 @@ class CompactorSimulationTest : SimulationTestBase() {
     @AfterEach
     fun tearDown() {
         driverConfig = CompactorDriverConfig()
+        // Stop the drivers' broadcast listeners before freeing the pool they write into — a
+        // top-level cancelAndJoin (suspending, frees the dispatcher), not a per-driver close.
+        runBlocking { mockDriver.scope.coroutineContext.job.cancelAndJoin() }
         sharedBufferPool.close()
         allocator.close()
     }

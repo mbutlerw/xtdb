@@ -22,7 +22,7 @@ import xtdb.catalog.BlockCatalog
 import xtdb.catalog.BlockCatalog.Companion.latestBlock
 import xtdb.compactor.Compactor
 import xtdb.compactor.CompactorDriverConfig
-import xtdb.compactor.CompactorMockDriver
+import xtdb.compactor.CompactorMockDriverFactory
 import org.junit.jupiter.api.extension.BeforeEachCallback
 import org.junit.jupiter.api.extension.ExtendWith
 import org.junit.jupiter.api.extension.ExtensionContext
@@ -103,7 +103,7 @@ class NodeSimulationTest : SimulationTestBase() {
     val garbageLifetime = Duration.ofSeconds(60)
     private lateinit var allocator: BufferAllocator
     private lateinit var sharedBufferPool: MemoryStorage
-    private lateinit var compactorDriver: CompactorMockDriver
+    private lateinit var compactorDriver: CompactorMockDriverFactory
     private lateinit var dbs: List<MockDatabase>
 
     @BeforeEach
@@ -111,7 +111,7 @@ class NodeSimulationTest : SimulationTestBase() {
         setLogLevel.invoke("xtdb".symbol, logLevel)
 
         val jobCalculator = createJobCalculator()
-        compactorDriver = CompactorMockDriver(dispatcher, currentSeed, CompactorDriverConfig())
+        compactorDriver = CompactorMockDriverFactory(dispatcher, currentSeed, CompactorDriverConfig())
         allocator = RootAllocator()
 
         // Create a single shared buffer pool for all systems
@@ -146,6 +146,8 @@ class NodeSimulationTest : SimulationTestBase() {
     @AfterEach
     fun tearDown() {
         dbs.forEach { it.close() }
+        // Stop the drivers' broadcast listeners before freeing the shared pool they write into.
+        runBlocking { compactorDriver.scope.coroutineContext.job.cancelAndJoin() }
         sharedBufferPool.close()
         allocator.close()
     }
