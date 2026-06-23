@@ -28,6 +28,8 @@ import xtdb.catalog.TableCatalog
 import xtdb.compactor.Compactor
 import xtdb.database.proto.DatabaseConfig
 import xtdb.database.proto.DatabaseMode
+import xtdb.diagnostics.TeardownStall
+import xtdb.error.Fault
 import xtdb.error.Incorrect
 import xtdb.indexer.*
 import xtdb.metadata.PageMetadata
@@ -54,6 +56,27 @@ import java.util.*
 import kotlin.concurrent.Volatile
 
 private val LOG = Database::class.logger
+
+// Bounds Database.close's wait on its job tree: a cancellation-immune wait somewhere in the tree
+// (xtdb#5711) would otherwise hang teardown forever. Generous — it only has to exceed a legitimate
+// teardown, which is seconds.
+private val CLOSE_TIMEOUT: Duration = Duration.ofSeconds(60)
+
+// Cancel + join `job`, bounded. Returns true if it timed out (the tree didn't respond to
+// cancellation), having first fired the stall probe so the wedged coroutines are dumped *before*
+// the caller frees their resources — the escape returns fast, so the test-plan hang-watchdog never
+// gets to dump them itself. `internal` for the teardown-escape test.
+internal fun awaitJobTeardown(job: Job?, timeout: Duration, dbName: String): Boolean =
+    runBlocking {
+        try {
+            withTimeout(timeout) { job?.cancelAndJoin() }
+            false
+        } catch (_: TimeoutCancellationException) {
+            LOG.warn { "[$dbName] close exceeded $timeout — abandoning a job tree that didn't respond to cancellation" }
+            TeardownStall.onStall("Database.close('$dbName') exceeded $timeout")
+            true
+        }
+    }
 
 class Database(
     val allocator: BufferAllocator,
@@ -130,15 +153,31 @@ class Database(
     override fun hashCode() = Objects.hash(name)
 
     override fun close() {
+        val dbName = name  // read before closeAll frees the partition this getter reads through
         meterRegistry?.let { reg -> registeredGauges.forEach { reg.remove(it) } }
-        runBlocking {
-            // One cancel for the whole job tree: the compactor, the source-log subscription and the
-            // live leader/follower term all run under `job`, so cancelling and joining it stops them
-            // and waits for their `launchWithCleanup` frees (driver, allocator, replica producer, ext
-            // source) before `closeAll` frees the database allocator below.
-            job?.cancelAndJoin()
-        }
-        (partitions.values + listOf(storage, allocator)).closeAll()
+
+        // One cancel for the whole job tree (compactor, source-log subscription, live term); each
+        // service's `launchWithCleanup` free (driver, allocator, replica producer, ext source) runs
+        // before `closeAll` frees the database allocator below. Bounded so an immune wait can't hang
+        // teardown forever (xtdb#5711).
+        val stalled = awaitJobTeardown(job, CLOSE_TIMEOUT, dbName)
+
+        // Free regardless: a clean teardown releases everything here; on a stall it forces the
+        // abandoned tree's leaked resources to surface (Arrow flags the outstanding allocations)
+        // rather than vanishing silently. On a stall this races any coroutine still using them, so a
+        // failure here is best-effort — we still raise the timeout Fault below (with that failure as
+        // its cause) so the stall is reported even when closeAll throws first.
+        val cleanupFailure = runCatching {
+            (partitions.values + listOf(storage, allocator)).closeAll()
+        }.exceptionOrNull()
+
+        if (stalled)
+            throw Fault(
+                "database '$dbName' did not shut down within $CLOSE_TIMEOUT",
+                "xtdb/db-close-timeout", cause = cleanupFailure,
+            )
+
+        cleanupFailure?.let { throw it }
     }
 
     fun submitTxBlocking(ops: List<TxOp>, opts: TxOpts): Xtdb.SubmittedTx {

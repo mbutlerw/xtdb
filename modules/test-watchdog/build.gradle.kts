@@ -8,6 +8,10 @@ plugins {
 java.toolchain.languageVersion.set(JavaLanguageVersion.of(21))
 
 dependencies {
+    // for the TeardownStallProbe SPI (xtdb#5711) — api is the lowest module and already on every
+    // test runtime, so this adds nothing to the aggregate classpath.
+    implementation(project(":xtdb-api"))
+
     implementation(libs.kotlinx.coroutines)
     implementation(libs.kotlinx.coroutines.debug)
     implementation(libs.junit.platform.launcher)

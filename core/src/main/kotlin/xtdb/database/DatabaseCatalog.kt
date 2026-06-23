@@ -13,7 +13,7 @@ import xtdb.error.Conflict
 import xtdb.error.Incorrect
 import xtdb.error.NotFound
 import xtdb.table.DatabaseName
-import xtdb.util.closeAll
+import xtdb.util.closeAllSuppressing
 import xtdb.util.closeOnCatch
 import xtdb.util.debug
 import xtdb.util.error
@@ -117,7 +117,10 @@ class DatabaseCatalog @JvmOverloads constructor(
         // Join without cancelling — cancelling would interrupt each db.close() mid-teardown.
         runBlocking { closerJob.children.toList().forEach { it.join() } }
         closerJob.cancel()
-        databases.values.closeAll()
+
+        // Close every database even if one throws (a close-timeout Fault, say), so a single wedged
+        // db can't strand its siblings unclosed.
+        databases.values.closeAllSuppressing()
     }
 
     companion object {

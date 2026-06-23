@@ -29,6 +29,24 @@ fun <K, V : AutoCloseable?> Map<K, V>.closeAll() {
     values.closeAll()
 }
 
+// Close every element even when some throw — for teardown paths where one failing close (e.g. a
+// close-timeout Fault) must not strand the rest. Rethrows the first failure with the others
+// suppressed; returns normally only if all close cleanly.
+fun Iterable<AutoCloseable?>.closeAllSuppressing() {
+    var failure: Throwable? = null
+    forEach { c ->
+        try {
+            c?.close()
+        } catch (t: Throwable) {
+            val f = failure
+            if (f == null) failure = t else f.addSuppressed(t)
+        }
+    }
+    failure?.let { throw it }
+}
+
+fun <K, V : AutoCloseable?> Map<K, V>.closeAllSuppressing() = values.closeAllSuppressing()
+
 @OptIn(ExperimentalContracts::class)
 inline fun <T : AutoCloseable?, R> T.closeOnCatch(block: (T) -> R): R {
     contract { callsInPlace(block, EXACTLY_ONCE) }

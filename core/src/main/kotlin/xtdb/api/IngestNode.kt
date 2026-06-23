@@ -7,7 +7,7 @@ import xtdb.cache.MemoryCache
 import xtdb.database.Database
 import xtdb.database.DatabaseName
 import xtdb.error.Incorrect
-import xtdb.util.closeAll
+import xtdb.util.closeAllSuppressing
 import xtdb.util.closeOnCatch
 import xtdb.util.safeMapValues
 import java.util.UUID.randomUUID
@@ -31,8 +31,9 @@ class IngestNode internal constructor(
     override fun close() {
         if (closing.compareAndSet(false, true)) {
             // close the databases (each owns its own LogProcessor / external source) before the base,
-            // which owns the allocator they're children of.
-            databases.closeAll()
+            // which owns the allocator they're children of. Suppressing so one db's close failure
+            // (e.g. a close-timeout Fault) doesn't strand its siblings.
+            databases.closeAllSuppressing()
             base.close()
         }
     }
