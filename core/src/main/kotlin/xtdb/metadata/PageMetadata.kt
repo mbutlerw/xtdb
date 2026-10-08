@@ -1,11 +1,10 @@
 package xtdb.metadata
 
-import com.carrotsearch.hppc.ObjectIntHashMap
-import com.carrotsearch.hppc.ObjectIntMap
 import com.github.benmanes.caffeine.cache.Cache
 import com.github.benmanes.caffeine.cache.Caffeine
 import kotlinx.coroutines.runBlocking
 import org.apache.arrow.memory.BufferAllocator
+import org.apache.arrow.memory.util.ArrowBufPointer
 import xtdb.storage.BufferPool
 import xtdb.arrow.Relation
 import xtdb.arrow.RelationReader
@@ -22,8 +21,6 @@ import kotlin.math.floor
 import kotlin.Long.Companion.MAX_VALUE as MAX_LONG
 import kotlin.Long.Companion.MIN_VALUE as MIN_LONG
 
-private typealias PageIdxsMap = ObjectIntMap<PageMetadata.PageIndexKey>
-
 internal val UNBOUND_TEMPORAL_METADATA =
     TemporalMetadata.newBuilder()
         .setMinValidFrom(MIN_LONG)
@@ -34,9 +31,16 @@ internal val UNBOUND_TEMPORAL_METADATA =
         .setMaxSystemFrom(MAX_LONG)
         .build()
 
-class PageMetadata private constructor(private val rel: Relation, private val pageIdxs: PageIdxsMap) : AutoCloseable {
+class PageMetadata private constructor(private val rel: Relation, private val pageIdxs: PageIdxs) : AutoCloseable {
 
     val trie = ArrowHashTrie(rel["nodes"])
+
+    internal class PageIdxs(private val positionsByCol: Map<ColumnName, IntArray>) {
+        operator fun get(columnName: ColumnName, pageIdx: Int): Int {
+            val positions = positionsByCol[columnName] ?: return -1
+            return if (pageIdx in positions.indices) positions[pageIdx] else -1
+        }
+    }
 
     companion object {
         @JvmStatic
@@ -50,10 +54,10 @@ class PageMetadata private constructor(private val rel: Relation, private val pa
                 }
             }
 
-        private fun readPageIdxs(rel: RelationReader): PageIdxsMap {
+        private fun readPageIdxs(rel: RelationReader): PageIdxs {
             val metadataReader = rel["nodes"]["leaf"]
+            val pageCount = metadataReader.valueCount
 
-            val pageIdxs: PageIdxsMap = ObjectIntHashMap()
             val dataPageIdxReader = metadataReader["data-page-idx"]
 
             val columnsReader = metadataReader["columns"]
@@ -61,25 +65,32 @@ class PageMetadata private constructor(private val rel: Relation, private val pa
             val colNameReader = columnReader["col-name"]
             val rootColReader = columnReader["root-col?"]
 
-            val colNames = HashSet<ColumnName>()
+            val positionsByNameBytes = HashMap<ArrowBufPointer, IntArray>()
+            val positionsByCol = HashMap<ColumnName, IntArray>()
+            val colNamePtr = ArrowBufPointer()
 
-            for (idx in 0 until metadataReader.valueCount) {
+            for (idx in 0 until pageCount) {
                 if (metadataReader.isNull(idx) || columnsReader.isNull(idx)) continue
 
                 val colsStartIdx = columnsReader.getListStartIndex(idx)
-                val dataPageIdx = dataPageIdxReader.takeUnless { it.isNull(idx) }?.getInt(idx) ?: -1
+                val dataPageIdx = dataPageIdxReader.getInt(idx)
 
                 for (colsDataIdx in colsStartIdx until colsStartIdx + columnsReader.getListCount(idx)) {
-                    val colName = colNameReader.getObject(colsDataIdx) as String
-                    colNames.add(colName)
+                    if (!rootColReader.getBoolean(colsDataIdx)) continue
 
-                    if (rootColReader.getBoolean(colsDataIdx)) {
-                        pageIdxs.put(PageIndexKey(colName, dataPageIdx), colsDataIdx)
-                    }
+                    colNameReader.getPointer(colsDataIdx, colNamePtr)
+
+                    val positions = positionsByNameBytes[colNamePtr]
+                        ?: IntArray(pageCount) { -1 }.also { positions ->
+                            positionsByNameBytes[ArrowBufPointer(colNamePtr.buf, colNamePtr.offset, colNamePtr.length)] = positions
+                            positionsByCol[colNameReader.getObject(colsDataIdx) as String] = positions
+                        }
+
+                    positions[dataPageIdx] = colsDataIdx
                 }
             }
 
-            return pageIdxs
+            return PageIdxs(positionsByCol)
         }
     }
 
@@ -101,19 +112,16 @@ class PageMetadata private constructor(private val rel: Relation, private val pa
         maxReader = temporalColTypesReader?.vectorForOrNull("max")
     }
 
-    internal data class PageIndexKey(val columnName: String, val pageIdx: Int)
-
-    fun rowIndex(columnName: String, pageIdx: Int) =
-        pageIdxs.getOrDefault(PageIndexKey(columnName, pageIdx), -1)
+    fun rowIndex(columnName: String, pageIdx: Int) = pageIdxs[columnName, pageIdx]
 
     fun temporalMetadata(pageIdx: Int): TemporalMetadata {
         // it seems in some tests we have files without any temporal values in...?
         val minReader = requireNotNull(minReader)
         val maxReader = requireNotNull(maxReader)
 
-        val systemFromIdx = pageIdxs[PageIndexKey("_system_from", pageIdx)]
-        val validFromIdx = pageIdxs[PageIndexKey("_valid_from", pageIdx)]
-        val validToIdx = pageIdxs[PageIndexKey("_valid_to", pageIdx)]
+        val systemFromIdx = pageIdxs["_system_from", pageIdx]
+        val validFromIdx = pageIdxs["_valid_from", pageIdx]
+        val validToIdx = pageIdxs["_valid_to", pageIdx]
 
         // a 0-row page (e.g. an empty table) writes its temporal columns' metadata but no min/max,
         // so the bounds are absent. Report the empty-set (proto defaults, min > max): the page then
@@ -134,7 +142,7 @@ class PageMetadata private constructor(private val rel: Relation, private val pa
 
     // TODO inline this into BP
     class Factory(al: BufferAllocator, private val bp: BufferPool, cacheSize: Long) : AutoCloseable {
-        private val pageIdxCache: Cache<Path, PageIdxsMap> =
+        private val pageIdxCache: Cache<Path, PageIdxs> =
             Caffeine.newBuilder().maximumSize(cacheSize).build()
 
         private val al = al.openChildAllocator("metadata-mgr")
