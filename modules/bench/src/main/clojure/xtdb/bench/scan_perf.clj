@@ -252,6 +252,8 @@
             :stage :compact
             :f (fn [{:keys [node]}] (c/compact-all! node nil))}
 
+           (when-not no-load? (b/settle-stage))
+
            {:t :call
             :stage :get-query-data
             :f (fn [{:keys [node !state]}]

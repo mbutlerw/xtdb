@@ -43,7 +43,7 @@
         {:keys [benchmark-total-time-ms benchmark-summary]} (parse-benchmark-summary lines)]
     {:all-stages stages
      :query-stages query-stages
-     :ingest-stages (filterv #(contains? #{"submit-docs" "sync" "finish-block" "compact"} (:stage %)) stages)
+     :ingest-stages (filterv #(contains? #{"submit-docs" "sync" "finish-block" "compact" "settle"} (:stage %)) stages)
      :benchmark-total-time-ms benchmark-total-time-ms
      :benchmark-summary benchmark-summary}))
 
@@ -79,7 +79,7 @@
         {:keys [benchmark-total-time-ms benchmark-summary]} (parse-benchmark-summary lines)]
     {:all-stages stages
      :query-stages query-stages
-     :ingest-stages (filterv #(contains? #{"sync" "compact"} (name (:stage %))) stages)
+     :ingest-stages (filterv #(contains? #{"sync" "compact" "settle"} (name (:stage %))) stages)
      :benchmark-total-time-ms benchmark-total-time-ms
      :benchmark-summary benchmark-summary}))
 
@@ -112,7 +112,7 @@
      :query-stages (filterv (fn [stage]
                               (str/starts-with? (:stage stage) "query-"))
                             stages)
-     :ingest-stages (filterv #(contains? #{"submit-docs" "sync" "finish-block" "compact" "download"} (:stage %)) stages)
+     :ingest-stages (filterv #(contains? #{"submit-docs" "sync" "finish-block" "compact" "settle" "download"} (:stage %)) stages)
      :benchmark-total-time-ms benchmark-total-time-ms
      :benchmark-summary benchmark-summary}))
 
@@ -148,7 +148,7 @@
         {:keys [benchmark-total-time-ms benchmark-summary]} (parse-benchmark-summary lines)]
     {:all-stages stages
      :query-stages (filterv #(= "query-stats" (name (:stage %))) stages)
-     :ingest-stages (filterv #(contains? #{"gen+submit-docs" "submit-docs" "sync" "finish-block" "compact"} (name (:stage %))) stages)
+     :ingest-stages (filterv #(contains? #{"gen+submit-docs" "submit-docs" "sync" "finish-block" "compact" "settle"} (name (:stage %))) stages)
      :benchmark-total-time-ms benchmark-total-time-ms
      :benchmark-summary benchmark-summary}))
 
@@ -207,7 +207,7 @@
         {:keys [benchmark-total-time-ms benchmark-summary]} (parse-benchmark-summary lines)]
     {:all-stages stages
      :patch-stages patch-stages
-     :ingest-stages (filterv #(contains? #{"submit-docs" "sync" "finish-block" "compact"} (name (:stage %))) stages)
+     :ingest-stages (filterv #(contains? #{"submit-docs" "sync" "finish-block" "compact" "settle"} (name (:stage %))) stages)
      :benchmark-total-time-ms benchmark-total-time-ms
      :benchmark-summary benchmark-summary}))
 
@@ -224,7 +224,7 @@
                      stage-lines)
         {:keys [benchmark-total-time-ms benchmark-summary]} (parse-benchmark-summary lines)]
     {:all-stages stages
-     :ingest-stages (filterv #(contains? #{"download" "submit-docs" "sync" "finish-block" "compact"} (name (:stage %))) stages)
+     :ingest-stages (filterv #(contains? #{"download" "submit-docs" "sync" "finish-block" "compact" "settle"} (name (:stage %))) stages)
      :benchmark-total-time-ms benchmark-total-time-ms
      :benchmark-summary benchmark-summary}))
 

@@ -76,7 +76,9 @@
                        :f (fn [{:keys [node]}] (b/flush-block! node))}
 
                       {:t :call, :stage :compact
-                       :f (fn [{:keys [node]}] (b/compact! node))}])}
+                       :f (fn [{:keys [node]}] (b/compact! node))}
+
+                      (b/settle-stage)])}
 
            (queries-stage :cold-queries query-language scale-factor)
 

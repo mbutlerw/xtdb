@@ -2,9 +2,16 @@
   (:require [clojure.data.json :as json]
             [clojure.java.io :as io]
             [clojure.test :as t :refer [deftest]]
-            [xtdb.bench :as b])
+            [xtdb.api :as xt]
+            [xtdb.bench :as b]
+            [xtdb.db-catalog :as db]
+            [xtdb.table-catalog :as table-cat]
+            [xtdb.test-util :as tu]
+            [xtdb.util :as util])
   (:import (java.io File)
-           (xtdb.api.error Incorrect)))
+           (xtdb.api.error Incorrect)
+           (xtdb.block.proto TableBlock)
+           (xtdb.log.proto TrieDetails)))
 
 (defn- temp-log-file ^File []
   (doto (File/createTempFile "bench-test" ".log") (.deleteOnExit)))
@@ -49,3 +56,25 @@
     (t/is (thrown-with-msg? Incorrect #"needs a `:stage` and `:t :call`"
                             (b/compile-benchmark {:title "test", :benchmark-type :test, :tasks [task]}))
           (pr-str task))))
+
+(deftest after-settle-the-latest-block-lists-only-compacted-tries
+  (util/with-tmp-dirs #{node-dir}
+    (with-open [node (tu/->local-node {:node-dir node-dir, :compactor-threads 1})]
+      (xt/execute-tx node [[:put-docs :foo {:xt/id 1}]])
+      (b/flush-block! node)
+      (b/compact! node)
+
+      ((b/compile-benchmark {:title "test", :benchmark-type :test, :bench-log-file (temp-log-file)
+                             :tasks [(b/settle-stage)]})
+       node)
+
+      (let [trie-keys (->> (.getByteArray (.getBufferPool (db/primary-db node))
+                                          (util/->path "tables/public$foo/blocks/b01.binpb"))
+                           TableBlock/parseFrom
+                           table-cat/<-table-block
+                           :partitions
+                           (mapcat :tries)
+                           (map #(.getTrieKey ^TrieDetails %)))]
+        (t/is (seq trie-keys))
+        (t/is (every? #(re-find #"^l01-" %) trie-keys)
+              (str "expected only L1 tries, got " (vec trie-keys)))))))

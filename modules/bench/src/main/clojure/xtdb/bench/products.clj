@@ -70,4 +70,6 @@
 
                             {:t :call, :stage :compact
                              :f (fn [{:keys [node]}]
-                                  (b/compact! node))}])}]})
+                                  (b/compact! node))}
+
+                            (when-not no-load? (b/settle-stage))])}]})
